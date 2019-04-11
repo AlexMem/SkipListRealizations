@@ -1,21 +1,43 @@
 #include <iostream>
 #include <time.h>
+#include <atomic>
+#include <bitset>
+
+using namespace std;
+
+template<class V> class MarkableReference {
+private:
+    static const uintptr_t mask = 0b10000000000000000000000000000000;
+    uintptr_t val;
+public:
+    MarkableReference(V* ref = nullptr, bool mark = false) {
+        val = ((uintptr_t)ref & ~mask) | (mark ? mask : 0);
+    }
+
+    V* getRef() {
+        return (V*)(val & ~mask);
+    }
+
+    bool getMark() {
+        return (val & mask);
+    }
+};
 
 template <class T> class ConcurrentSkipList {
     template <class E> class Node {
     public:
         E value;
         int level;
-        Node<E>** nexts;
+        atomic<MarkableReference<Node<E>>*>* nexts;
 
         Node() {
-            nexts = nullptr;
+            nexts = new atomic<MarkableReference<Node<E>>*>[MAXHEIGHT];
             level = 0;
         }
 
         Node(E value, int lvl) {
             this->value = value;
-            nexts = new Node<E>*[lvl+1];
+            nexts = new atomic<MarkableReference<Node<E>>*>[lvl+1];
             level = lvl;
         }
 
@@ -27,7 +49,7 @@ template <class T> class ConcurrentSkipList {
 // FIELDS
 private:
     const double P = 0.5;
-    const int MAXHEIGHT = 20;
+    const static int MAXHEIGHT = 20;
 
     Node<T>* head;
     int height;
@@ -40,9 +62,8 @@ public:
         nil = new Node<T>();
 
         head = new Node<T>();
-        head->nexts = new Node<T>*[MAXHEIGHT];
         for(int i = 0; i < MAXHEIGHT; ++i) {
-            head->nexts[i] = nil;
+            head->nexts[i] = new MarkableReference<Node<T>>(nil, false);
         }
         head->level = MAXHEIGHT-1;
 
@@ -51,91 +72,98 @@ public:
 
 // PUBLIC METHODS
 public:
-    T search(T value) {
-        Node<T>* p = head;
-        for (int i = height - 1; i >= 0; --i) {
-            while (p->nexts[i] != nil && compare(p->nexts[i], value) < 0) {
-                p = p->nexts[i];
-            }
-        }
-
-        p = p->nexts[0];
-        if (compare(p, value) == 0) {
-            return p->value;
-        }
-        throw std::runtime_error("Value not found");
+    bool contains(T value) {
+        return false;
     }
 
-    void insert(T value) {
-        Node<T>** update = new Node<T>*[MAXHEIGHT];
-        Node<T>* p = head;
-        for (int i = height - 1; i >= 0; --i) {
-            while (p->nexts[i] != nil && compare(p->nexts[i], value) < 0) {
-                p = p->nexts[i];
+    T find(T value, MarkableReference<Node<T>>** preds, MarkableReference<Node<T>>** succs) {
+        int botLvl = 0;
+        MarkableReference<Node<T>>* pred;
+        MarkableReference<Node<T>>* curr;
+        MarkableReference<Node<T>>* succ;
+
+    retry:
+        while (true) {
+            pred = new MarkableReference(head, false);
+            for (int lvl = MAXHEIGHT-1; lvl >= botLvl; --lvl) {
+                curr = pred->getRef()->nexts[lvl].load();
+                while (true) {
+                    succ = curr->getRef()->nexts[lvl].load();
+                    while (succ->getMark()){
+                        if(!pred->getRef()->nexts[lvl].compare_exchange_strong(curr, succ)) {
+                            goto retry;
+                        }
+                        curr = pred->getRef()->nexts[lvl].load();
+                        succ = curr->getRef()->nexts[lvl].load();
+                    }
+
+                    if(compare(curr->getRef(), value) < 0) {
+                        pred = curr;
+                        curr = succ;
+                    } else {
+                        break;
+                    }
+                }
+
+                preds[lvl] = pred;
+                succs[lvl] = curr;
             }
 
-            update[i] = p;
+            return compare(curr->getRef(), value) == 0;
         }
+    }
 
-        p = p->nexts[0];
-        if (compare(p, value) != 0) {
-            int lvl = randomLevel();
-            if (lvl >= height) {
-                for (int i = height; i <= lvl; ++i) {
-                    update[i] = head;
-                    height = lvl+1;
+    bool add(T value) {
+        int topLvl = randomLevel();
+        int botLvl = 0;
+        MarkableReference<Node<T>>** preds = new MarkableReference<Node<T>>*[MAXHEIGHT];
+        MarkableReference<Node<T>>** succs = new MarkableReference<Node<T>>*[MAXHEIGHT];
+
+        while(true) {
+            if(find(value, preds, succs)){
+                return false;
+            }
+
+            Node<T>* newNode = new Node<T>(value, topLvl);
+            for (int lvl = botLvl; lvl <= topLvl; ++lvl) {
+                newNode->nexts[lvl].store(succs[lvl]);
+            }
+            MarkableReference<Node<T>>* pred = preds[botLvl];
+            MarkableReference<Node<T>>* succ = succs[botLvl];
+            newNode->nexts[botLvl].store(succ);
+            if(!pred->getRef()->nexts[botLvl].compare_exchange_strong(succ, new MarkableReference(newNode, false))) {
+                continue;
+            }
+
+            for (int lvl = botLvl+1; lvl <= topLvl; ++lvl) {
+                while(true) {
+                    pred = preds[lvl];
+                    succ = succs[lvl];
+                    if(pred->getRef()->nexts[lvl].compare_exchange_strong(succ, new MarkableReference(newNode, false))) {
+                        break;
+                    }
+                    find(value, preds, succs);
                 }
             }
 
-            p = new Node<T>(value, lvl);
-            for (int i = 0; i <= lvl; ++i) {
-                p->nexts[i] = update[i]->nexts[i];
-                update[i]->nexts[i] = p;
-            }
-        } else {
-            p->value = value;
+            return true;
         }
-
-        delete[] update;
     }
 
-    void deleteElement(T value) {
-        Node<T>** update = new Node<T>*[MAXHEIGHT];
-        Node<T>* p = head;
-        for (int i = height - 1; i >= 0; --i) {
-            while (p->nexts[i] != nil && compare(p->nexts[i], value) < 0) {
-                p = p->nexts[i];
-            }
+    void remove(T value) {
 
-            update[i] = p;
-        }
-
-        p = p->nexts[0];
-        if (compare(p, value) == 0) {
-            for (int i = 0; i < height; ++i) {
-                if (update[i]->nexts[i] != p) break;
-                update[i]->nexts[i] = p->nexts[i];
-            }
-            delete p;
-
-            while (height > 1 && head->nexts[height-1] == nil) {
-                --height;
-            }
-        }
-
-        delete[] update;
     }
 
     void out() {
-        for (auto *p = head; p!=nil; p=p->nexts[0]) {
+        for (Node<T> *p = head; p!=nil; p=p->nexts[0].load()->getRef()) {
             if(p == head) {
                 std::cout << "h [" << p->level << "]\t->\t";
             } else {
                 std::cout << p->value << " [" << p->level << "]\t->\t";
             }
             for (int i = 0; i <= p->level; ++i) {
-                if(p->nexts[i] != nil) {
-                    std::cout << p->nexts[i]->value << "\t";
+                if(p->nexts[i].load()->getRef() != nil) {
+                    std::cout << p->nexts[i].load()->getRef()->value << "\t";
                 } else {
                     std::cout << "n\t";
                 }
@@ -165,30 +193,31 @@ private:
 
 void randInit(ConcurrentSkipList<int> *list) {
     for(int i = 0; i < 10; ++i) {
-        list->insert((rand()%2? -1:1)*rand());
+        list->add((rand() % 2 ? -1 : 1) * rand());
     }
 }
 
 void notRandInit(ConcurrentSkipList<int> *list) {
-    list->insert(-2);
-    list->insert(7);
-    list->insert(0);
-    list->insert(1);
-    list->insert(8);
-    list->insert(15);
-    list->insert(10);
+    list->add(-2);
+    list->add(7);
+    list->add(0);
+    list->add(1);
+    list->add(8);
+    list->add(15);
+    list->add(10);
 }
 
 int main() {
     ConcurrentSkipList<int> list;
     notRandInit(&list);
     list.out();
+//
+//    std::cout << std::endl;
+//
+//    list.remove(-2);
+//    list.remove(15);
+//    list.remove(8);
+//    list.out();
 
-    std::cout << std::endl;
-
-    list.deleteElement(-2);
-    list.deleteElement(15);
-    list.deleteElement(8);
-    list.out();
     return 0;
 }
