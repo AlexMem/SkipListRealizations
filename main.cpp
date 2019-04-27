@@ -24,6 +24,7 @@ void notRandInit(ConcurrentSkipList<int> *list) {
 
 
 
+//13 adds, 1 remove
 void routine1(ConcurrentSkipList<int>* list) {
     list->add(-2);
     list->add(7);
@@ -43,9 +44,9 @@ void routine1(ConcurrentSkipList<int>* list) {
     }
     list->add(55);
     list->add(30);
-    //13 adds, 1 remove
 }
 
+//12 adds, 1 remove
 void routine2(ConcurrentSkipList<int>* list) {
     list->add(-12);
     list->add(57);
@@ -60,9 +61,9 @@ void routine2(ConcurrentSkipList<int>* list) {
     list->add(-27);
     list->add(14);
     list->add(26);
-    //12 adds, 1 remove
 }
 
+//11 adds, 1 remove
 void routine3(ConcurrentSkipList<int>* list) {
     list->add(-13);
     list->add(59);
@@ -76,7 +77,6 @@ void routine3(ConcurrentSkipList<int>* list) {
     list->add(-47);
     list->add(34);
     list->add(27);
-    //11 adds, 1 remove
 }
 
 void randRoutine(ConcurrentSkipList<int>* list, int seed) {
@@ -123,8 +123,14 @@ void randTest(ConcurrentSkipList<int>* list) {
 int main() {
     ConcurrentSkipList<int> list;
 
-    fixedTest(&list);
+    randTest(&list);
     list.out();
+
+//    int *a = new int;
+//    *a = 5;
+//    MarkableReference<int> ma(a, false);
+//    atomic<MarkableReference<int>> ama(ma);
+//    cout << ama.is_lock_free() << " " << *ama.load().getRef() << endl;
 
     return 0;
 }
