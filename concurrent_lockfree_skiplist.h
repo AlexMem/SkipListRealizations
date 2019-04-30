@@ -9,6 +9,10 @@ private:
     static const uintptr_t mask = 0b10000000000000000000000000000000;
     uintptr_t val;
 public:
+    MarkableReference() {
+        val = 0;
+    }
+
     MarkableReference(V* ref, bool mark) {
         val = ((uintptr_t)ref & ~mask) | (mark ? mask : 0);
     }
@@ -31,22 +35,30 @@ template <class T> class ConcurrentSkipList {
     public:
         E value;
         int level;
-        atomic<MarkableReference<Node<E>>*>* nexts;
+        atomic<MarkableReference<Node<E>>>** nexts;
 
         Node() {
-            nexts = new atomic<MarkableReference<Node<E>>*>[MAXHEIGHT];
-            level = 0;
+            nexts = new atomic<MarkableReference<Node<E>>>*[MAXHEIGHT];
+            MarkableReference<Node<E>> mock;
+            for (int i = 0; i < MAXHEIGHT; ++i) {
+                nexts[i] = new atomic<MarkableReference<Node<E>>>(mock);
+            }
+            level = MAXHEIGHT-1;
         }
 
         Node(E value, int lvl) {
             this->value = value;
-            nexts = new atomic<MarkableReference<Node<E>>*>[lvl+1];
+            nexts = new atomic<MarkableReference<Node<E>>>*[lvl+1];
+            MarkableReference<Node<E>> mock;
+            for (int i = 0; i <= lvl; ++i) {
+                nexts[i] = new atomic<MarkableReference<Node<E>>>(mock);
+            }
             level = lvl;
         }
 
         ~Node() {
             for (int i = 0; i <= level; ++i) {
-                delete nexts[i].load();
+                delete nexts[i];
             }
             delete[] nexts;
         }
@@ -59,7 +71,7 @@ private:
 
     random_device randomDevice;
 
-    MarkableReference<Node<T>>* markableHead;
+    Node<T>* head;
     Node<T>* tail;
     int height;
 
@@ -68,14 +80,23 @@ public:
     ConcurrentSkipList() {
         tail = new Node<T>();
 
-        Node<T>* head = new Node<T>();
+        head = new Node<T>();
+        MarkableReference<Node<T>> markableTail(tail, false);
         for(int i = 0; i < MAXHEIGHT; ++i) {
-            head->nexts[i] = new MarkableReference<Node<T>>(tail, false);
+            head->nexts[i]->store(markableTail);
         }
-        head->level = MAXHEIGHT-1;
-        markableHead = new MarkableReference<Node<T>>(head, false);
 
         height = 1;
+    }
+
+    ~ConcurrentSkipList() {
+        Node<T> *toDel;
+        for (Node<T> *p = head; p!=tail;) {
+            toDel = p;
+            p=p->nexts[0]->load().getRef();
+            delete toDel;
+        }
+        delete tail;
     }
 
 // PUBLIC METHODS
@@ -83,19 +104,19 @@ public:
     bool contains(T value) {
         int botLvl = 0;
 
-        MarkableReference<Node<T>>* pred = markableHead;
-        MarkableReference<Node<T>>* curr;
-        MarkableReference<Node<T>>* succ;
+        MarkableReference<Node<T>> pred(head, false);
+        MarkableReference<Node<T>> curr;
+        MarkableReference<Node<T>> succ;
 
         for (int lvl = MAXHEIGHT-1; lvl >= botLvl; --lvl) {
-            curr = pred->getRef()->nexts[lvl].load();
+            curr = pred.getRef()->nexts[lvl]->load();
             while(true) {
-                succ = curr->getRef()->nexts[lvl].load();
-                while(curr->getRef() != tail && succ->getMark()) { // optimization?
-                    curr = pred->getRef()->nexts[lvl].load();
-                    succ = curr->getRef()->nexts[lvl].load();
+                succ = curr.getRef()->nexts[lvl]->load();
+                while(curr.getRef() != tail && succ.getMark()) { // optimization?
+                    curr = pred.getRef()->nexts[lvl]->load();
+                    succ = curr.getRef()->nexts[lvl]->load();
                 }
-                if(compare(curr->getRef(), value) < 0) {
+                if(compare(curr.getRef(), value) < 0) {
                     pred = curr;
                     curr = succ;
                 } else {
@@ -104,36 +125,35 @@ public:
             }
         }
 
-        return compare(curr->getRef(), value) == 0;
+        return compare(curr.getRef(), value) == 0;
     }
 
-    bool find(T value, MarkableReference<Node<T>>** preds, MarkableReference<Node<T>>** succs) {
+    bool find(T value, MarkableReference<Node<T>>* preds, MarkableReference<Node<T>>* succs) {
         int botLvl = 0;
-        MarkableReference<Node<T>>* markableSucc;
+        MarkableReference<Node<T>> markableHead(head, false);
 
-        MarkableReference<Node<T>>* pred;
-        MarkableReference<Node<T>>* curr;
-        MarkableReference<Node<T>>* succ;
+        MarkableReference<Node<T>> pred;
+        MarkableReference<Node<T>> curr;
+        MarkableReference<Node<T>> succ;
 
         retry:
         while (true) {
             pred = markableHead;
             for (int lvl = MAXHEIGHT-1; lvl >= botLvl; --lvl) {
-                curr = pred->getRef()->nexts[lvl].load();
+                curr = pred.getRef()->nexts[lvl]->load();
                 while (true) {
-                    succ = curr->getRef()->nexts[lvl].load();
-                    while (curr->getRef() != tail && succ->getMark()){
-                        markableSucc = new MarkableReference<Node<T>>(succ->getRef(), false);
-                        if(!pred->getRef()->nexts[lvl].compare_exchange_strong(curr, markableSucc)) {
-                            delete markableSucc;
+                    succ = curr.getRef()->nexts[lvl]->load();
+                    while (curr.getRef() != tail && succ.getMark()){
+                        MarkableReference<Node<T>> newSucc(succ.getRef(), false);
+                        if(!pred.getRef()->nexts[lvl]->compare_exchange_strong(curr, newSucc)) {
                             goto retry;
                         }
                         // linearization point if lvl == 0
-                        curr = pred->getRef()->nexts[lvl].load();
-                        succ = curr->getRef()->nexts[lvl].load();
+                        curr = pred.getRef()->nexts[lvl]->load();
+                        succ = curr.getRef()->nexts[lvl]->load();
                     }
 
-                    if(compare(curr->getRef(), value) < 0) {
+                    if(compare(curr.getRef(), value) < 0) {
                         pred = curr;
                         curr = succ;
                     } else {
@@ -145,16 +165,15 @@ public:
                 succs[lvl] = curr;
             }
 
-            return compare(curr->getRef(), value) == 0;
+            return compare(curr.getRef(), value) == 0;
         }
     }
 
     bool add(T value) {
         int topLvl = randomLevel();
         int botLvl = 0;
-        MarkableReference<Node<T>>* markableNewNode;
-        MarkableReference<Node<T>>** preds = new MarkableReference<Node<T>>*[MAXHEIGHT];
-        MarkableReference<Node<T>>** succs = new MarkableReference<Node<T>>*[MAXHEIGHT];
+        MarkableReference<Node<T>>* preds = new MarkableReference<Node<T>>[MAXHEIGHT];
+        MarkableReference<Node<T>>* succs = new MarkableReference<Node<T>>[MAXHEIGHT];
 
         while(true) {
             if(find(value, preds, succs)){
@@ -165,29 +184,26 @@ public:
 
             Node<T>* newNode = new Node<T>(value, topLvl);
             for (int lvl = botLvl; lvl <= topLvl; ++lvl) {
-                newNode->nexts[lvl].store(succs[lvl]);
+                newNode->nexts[lvl]->store(succs[lvl]);
             }
-            MarkableReference<Node<T>>* pred = preds[botLvl];
-            MarkableReference<Node<T>>* succ = succs[botLvl];
-            newNode->nexts[botLvl].store(succ);
-            markableNewNode = new MarkableReference<Node<T>>(newNode, false);
-            if(!pred->getRef()->nexts[botLvl].compare_exchange_strong(succ, markableNewNode)) {
-                delete markableNewNode;
-//                delete newNode;
+            MarkableReference<Node<T>> pred = preds[botLvl];
+            MarkableReference<Node<T>> succ = succs[botLvl];
+            newNode->nexts[botLvl]->store(succ);
+            MarkableReference<Node<T>> markableNewNode(newNode, false);
+            if(!pred.getRef()->nexts[botLvl]->compare_exchange_strong(succ, markableNewNode)) {
+                delete newNode;
                 continue;
             }
             // linearization point
 
-            for (int lvl = botLvl+1; lvl <= topLvl; ++lvl) {
+            for (int lvl = botLvl+1; lvl < topLvl; ++lvl) {
                 while(true) {
                     pred = preds[lvl];
                     succ = succs[lvl];
-                    markableNewNode = new MarkableReference<Node<T>>(newNode, false);
-                    if(pred->getRef()->nexts[lvl].compare_exchange_strong(succ, markableNewNode)) {
+                    if(pred.getRef()->nexts[lvl]->compare_exchange_strong(succ, markableNewNode)) {
                         break;
                     }
                     find(value, preds, succs);
-                    delete markableNewNode;
                 }
             }
 
@@ -199,11 +215,10 @@ public:
 
     bool remove(T value) {
         int botLvl = 0;
-        MarkableReference<Node<T>>* markableSucc;
 
-        MarkableReference<Node<T>>** preds = new MarkableReference<Node<T>>*[MAXHEIGHT];
-        MarkableReference<Node<T>>** succs = new MarkableReference<Node<T>>*[MAXHEIGHT];
-        MarkableReference<Node<T>>* succ;
+        MarkableReference<Node<T>>* preds = new MarkableReference<Node<T>>[MAXHEIGHT];
+        MarkableReference<Node<T>>* succs = new MarkableReference<Node<T>>[MAXHEIGHT];
+        MarkableReference<Node<T>> succ;
 
         while(true) {
             if(!find(value, preds, succs)) {
@@ -212,33 +227,33 @@ public:
                 return false;
             }
 
-            Node<T>* toRemove = succs[botLvl]->getRef();
+            Node<T>* toRemove = succs[botLvl].getRef();
             for (int lvl = toRemove->level; lvl >= botLvl+1; --lvl) {
-                succ = toRemove->nexts[lvl].load();
-                while(!succ->getMark()) {
-                    markableSucc = new MarkableReference<Node<T>>(succ->getRef(), true);
-                    if(!toRemove->nexts[lvl].compare_exchange_strong(succ, markableSucc)) {
-                        delete markableSucc;
-                    }
-                    succ = toRemove->nexts[lvl].load();
+                succ = toRemove->nexts[lvl]->load();
+                while(!succ.getMark()) {
+                    MarkableReference<Node<T>> newSucc(succ.getRef(), true);
+                    toRemove->nexts[lvl]->compare_exchange_strong(succ, newSucc);
+                    succ = toRemove->nexts[lvl]->load();
                 }
             }
 
-            succ = toRemove->nexts[botLvl].load();
+            succ = toRemove->nexts[botLvl]->load();
             while(true) {
-                markableSucc = new MarkableReference<Node<T>>(succ->getRef(), true);
-                bool markedIt = toRemove->nexts[botLvl].compare_exchange_strong(succ, markableSucc);
+                MarkableReference<Node<T>> newSucc(succ.getRef(), true);
+                bool markedIt = toRemove->nexts[botLvl]->compare_exchange_strong(succ, newSucc);
                 // linearization point if markedIf == true
-                succ = succs[botLvl]->getRef()->nexts[botLvl].load();
+                succ = succs[botLvl].getRef()->nexts[botLvl]->load();
                 if(markedIt) {
                     find(value, preds, succs);
-                    delete toRemove;
+//                    cout << endl << "Deleting " << dec << toRemove->nexts[botLvl]->is_lock_free() << " " << toRemove->value << " " << hex << toRemove << endl;
+//                    delete toRemove; // TODO fix it
+//                    cout << "deleted" << endl;
+
                     delete[] preds;
                     delete[] succs;
                     return true;
                 } else {
-                    delete markableSucc;
-                    if(succ->getMark()) {
+                    if(succ.getMark()) {
                         delete[] preds;
                         delete[] succs;
                         return false;
@@ -249,15 +264,15 @@ public:
     }
 
     void out() {
-        for (Node<T> *p = markableHead->getRef(); p!=tail; p=p->nexts[0].load()->getRef()) {
-            if(p == markableHead->getRef()) {
+        for (Node<T> *p = head; p!=tail; p=p->nexts[0]->load().getRef()) {
+            if(p == head) {
                 std::cout << "h [" << p->level << "]\t->\t";
             } else {
                 std::cout << p->value << " [" << p->level << "]\t->\t";
             }
             for (int i = 0; i <= p->level; ++i) {
-                if(p->nexts[i].load()->getRef() != tail) {
-                    std::cout << p->nexts[i].load()->getRef()->value << "[" << p->nexts[i].load()->getMark() << "]\t";
+                if(p->nexts[i]->load().getRef() != tail) {
+                    std::cout << p->nexts[i]->load().getRef()->value << "[" << p->nexts[i]->load().getMark() << "]\t";
                 } else {
                     std::cout << "n[0]\t";
                 }
@@ -267,7 +282,7 @@ public:
     }
 
     void checkLockFree() {
-        for(Node<T>* curr = markableHead->getRef(); curr != tail; curr = curr->nexts[0].load()->getRef()) {
+        for(Node<T>* curr = head; curr != tail; curr = curr->nexts[0]->load().getRef()) {
             cout << "Node " << curr->value << ":" << endl;
             checkNodeForLockFree(curr);
         }
@@ -279,7 +294,7 @@ private:
         int lvl = 0;
         std::mt19937 mt(randomDevice());
         std::uniform_real_distribution<double> dist(0.0, 1.0);
-        while (dist(mt) < P && lvl < MAXHEIGHT) {
+        while (dist(mt) < P && lvl < MAXHEIGHT-1) {
             ++lvl;
         }
 

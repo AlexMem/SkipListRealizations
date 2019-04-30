@@ -2,6 +2,7 @@
 #include <time.h>
 #include <thread>
 #include <mingw.thread.h>
+#include <unistd.h>
 #include "concurrent_lockfree_skiplist.h"
 
 using namespace std;
@@ -24,7 +25,7 @@ void notRandInit(ConcurrentSkipList<int> *list) {
 
 
 
-//13 adds, 1 remove
+//14 adds, 1 remove
 void routine1(ConcurrentSkipList<int>* list) {
     list->add(-2);
     list->add(7);
@@ -38,10 +39,10 @@ void routine1(ConcurrentSkipList<int>* list) {
     list->add(-4);
     list->add(-1);
     list->add(87);
-    if(list->contains(-12)) {
-        cout << "contains -12" << endl;
+//    if(list->contains(-12)) {
+//        cout << "contains -12" << endl;
         list->remove(-12);
-    }
+//    }
     list->add(55);
     list->add(30);
 }
@@ -81,11 +82,16 @@ void routine3(ConcurrentSkipList<int>* list) {
 
 void randRoutine(ConcurrentSkipList<int>* list, int seed) {
     srand(seed);
-    int k = 0;
-    for (int i = 0; i < 25; ++i) {
-        list->add(rand()%10000)?k++:k;
+    int added = 0;
+    int removed = 0;
+    for (int i = 0; i < 255; ++i) {
+//        if(rand()%4) {
+            list->add(rand()%20000)?added++:added;
+//        } else {
+//            list->remove(rand()%10000)?removed++:removed;
+//        }
     }
-    cout << k << endl;
+//    cout << added << ' ' << removed << endl;
 }
 
 void fixedTest(ConcurrentSkipList<int>* list) {
@@ -118,19 +124,37 @@ void randTest(ConcurrentSkipList<int>* list) {
     t8.join();
 }
 
+void repeatTest(int times) {
+    for (int i = 0; i < times; ++i) {
+        ConcurrentSkipList<int> list;
+        randTest(&list);
+//        list.out();
+    }
+}
 
 
 int main() {
-    ConcurrentSkipList<int> list;
+//    ConcurrentSkipList<int> list;
+//    fixedTest(&list);
+//    list.out();
 
-    randTest(&list);
-    list.out();
+    shared_ptr<int> p1(new int(5));
 
-//    int *a = new int;
-//    *a = 5;
-//    MarkableReference<int> ma(a, false);
-//    atomic<MarkableReference<int>> ama(ma);
-//    cout << ama.is_lock_free() << " " << *ama.load().getRef() << endl;
+    repeatTest(2555);
+
+    /*int *a = new int;
+    int *b = new int;
+    *a = 5;
+    *b = 7;
+    MarkableReference<int> ma(a, false);
+    cout << &ma << endl;
+    atomic<MarkableReference<int>> ama(ma);
+    cout << ama.is_lock_free() << " " << *ama.load().getRef() << endl;
+    MarkableReference<int> _ma = ama.load();
+    cout << &_ma << endl;
+    MarkableReference<int> mb(b, false);
+    cout << ama.compare_exchange_strong(_ma, mb) << endl;
+    cout << ama.is_lock_free() << " " << *ama.load().getRef() << endl;*/
 
     return 0;
 }
