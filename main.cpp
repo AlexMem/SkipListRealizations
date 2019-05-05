@@ -39,10 +39,10 @@ void routine1(ConcurrentSkipList<int>* list) {
     list->add(-4);
     list->add(-1);
     list->add(87);
-//    if(list->contains(-12)) {
+    if(list->contains(-12)) {
 //        cout << "contains -12" << endl;
         list->remove(-12);
-//    }
+    }
     list->add(55);
     list->add(30);
 }
@@ -85,11 +85,11 @@ void randRoutine(ConcurrentSkipList<int>* list, int seed) {
     int added = 0;
     int removed = 0;
     for (int i = 0; i < 255; ++i) {
-//        if(rand()%4) {
+        if(rand()%2) {
             list->add(rand()%20000)?added++:added;
-//        } else {
-//            list->remove(rand()%10000)?removed++:removed;
-//        }
+        } else {
+            list->remove(rand()%20000)?removed++:removed;
+        }
     }
 //    cout << added << ' ' << removed << endl;
 }
@@ -128,6 +128,7 @@ void repeatTest(int times) {
     for (int i = 0; i < times; ++i) {
         ConcurrentSkipList<int> list;
         randTest(&list);
+//        if(i%50 == 0) cout << i << endl;
 //        list.out();
     }
 }
@@ -136,11 +137,13 @@ void repeatTest(int times) {
 int main() {
 //    ConcurrentSkipList<int> list;
 //    fixedTest(&list);
-//    list.out();
+//    list.print();
 
-    shared_ptr<int> p1(new int(5));
+//    repeatTest(1);
+    repeatTest(3577);
 
-    repeatTest(2555);
+//    int a;
+//    cin >> a;
 
     /*int *a = new int;
     int *b = new int;

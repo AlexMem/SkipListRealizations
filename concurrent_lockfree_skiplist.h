@@ -1,34 +1,10 @@
 #include <iostream>
-#include <atomic>
 #include <random>
+#include <atomic>
+#include "markable_reference.h"
+#include "hazard_domain.h"
 
 using namespace std;
-
-template<class V> class MarkableReference {
-private:
-    static const uintptr_t mask = 0b10000000000000000000000000000000;
-    uintptr_t val;
-public:
-    MarkableReference() {
-        val = 0;
-    }
-
-    MarkableReference(V* ref, bool mark) {
-        val = ((uintptr_t)ref & ~mask) | (mark ? mask : 0);
-    }
-
-    V* getRef() {
-        return (V*)(val & ~mask);
-    }
-
-    bool getMark() {
-        return (val & mask);
-    }
-
-    void setRef(V* ref) {
-        val = ((uintptr_t)ref & ~mask) | (val & mask);
-    }
-};
 
 template <class T> class ConcurrentSkipList {
     template <class E> class Node {
@@ -57,7 +33,7 @@ template <class T> class ConcurrentSkipList {
         }
 
         ~Node() {
-            for (int i = 0; i <= level; ++i) {
+            for (int i = level; i >= 0; --i) {
                 delete nexts[i];
             }
             delete[] nexts;
@@ -70,6 +46,7 @@ private:
     const static int MAXHEIGHT = 20;
 
     random_device randomDevice;
+    HazardDomain<Node<T>> hazardDomain;
 
     Node<T>* head;
     Node<T>* tail;
@@ -103,21 +80,33 @@ public:
 public:
     bool contains(T value) {
         int botLvl = 0;
+        int hzCellIndex = hazardDomain.acquireCell();
 
+        hazardDomain.putPtr(head, hzCellIndex, 0);
         MarkableReference<Node<T>> pred(head, false);
         MarkableReference<Node<T>> curr;
         MarkableReference<Node<T>> succ;
 
         for (int lvl = MAXHEIGHT-1; lvl >= botLvl; --lvl) {
+            hazardDomain.putPtr(pred.getRef(), hzCellIndex, 1);
             curr = pred.getRef()->nexts[lvl]->load();
+
             while(true) {
+                hazardDomain.putPtr(curr.getRef(), hzCellIndex, 2);
                 succ = curr.getRef()->nexts[lvl]->load();
+
                 while(curr.getRef() != tail && succ.getMark()) { // optimization?
+                    hazardDomain.putPtr(pred.getRef(), hzCellIndex, 1);
                     curr = pred.getRef()->nexts[lvl]->load();
+
+                    hazardDomain.putPtr(curr.getRef(), hzCellIndex, 2);
                     succ = curr.getRef()->nexts[lvl]->load();
                 }
                 if(compare(curr.getRef(), value) < 0) {
+                    hazardDomain.putPtr(pred.getRef(), hzCellIndex, 0);
                     pred = curr;
+
+                    hazardDomain.putPtr(curr.getRef(), hzCellIndex, 1);
                     curr = succ;
                 } else {
                     break;
@@ -125,11 +114,14 @@ public:
             }
         }
 
-        return compare(curr.getRef(), value) == 0;
+        bool result = (compare(curr.getRef(), value) == 0);
+        hazardDomain.releaseCell(hzCellIndex);
+        return result;
     }
 
-    bool find(T value, MarkableReference<Node<T>>* preds, MarkableReference<Node<T>>* succs) {
+    bool find(T value, MarkableReference<Node<T>>* preds, MarkableReference<Node<T>>* succs, int hzCellIndex) {
         int botLvl = 0;
+        hazardDomain.putPtr(head, hzCellIndex, 0);
         MarkableReference<Node<T>> markableHead(head, false);
 
         MarkableReference<Node<T>> pred;
@@ -138,30 +130,46 @@ public:
 
         retry:
         while (true) {
+            hazardDomain.putPtr(head, hzCellIndex, 0);
             pred = markableHead;
+
             for (int lvl = MAXHEIGHT-1; lvl >= botLvl; --lvl) {
+                hazardDomain.putPtr(pred.getRef(), hzCellIndex, 1);
                 curr = pred.getRef()->nexts[lvl]->load();
+
                 while (true) {
+                    hazardDomain.putPtr(curr.getRef(), hzCellIndex, 2);
                     succ = curr.getRef()->nexts[lvl]->load();
+
                     while (curr.getRef() != tail && succ.getMark()){
+                        hazardDomain.putPtr(succ.getRef(), hzCellIndex, 3);
                         MarkableReference<Node<T>> newSucc(succ.getRef(), false);
                         if(!pred.getRef()->nexts[lvl]->compare_exchange_strong(curr, newSucc)) {
                             goto retry;
                         }
                         // linearization point if lvl == 0
+                        hazardDomain.putPtr(pred.getRef(), hzCellIndex, 1);
                         curr = pred.getRef()->nexts[lvl]->load();
+
+                        hazardDomain.putPtr(curr.getRef(), hzCellIndex, 2);
                         succ = curr.getRef()->nexts[lvl]->load();
                     }
 
                     if(compare(curr.getRef(), value) < 0) {
+                        hazardDomain.putPtr(pred.getRef(), hzCellIndex, 0);
                         pred = curr;
+
+                        hazardDomain.putPtr(curr.getRef(), hzCellIndex, 1);
                         curr = succ;
                     } else {
                         break;
                     }
                 }
 
+                hazardDomain.putPtr(pred.getRef(), hzCellIndex, 2*lvl+5);
                 preds[lvl] = pred;
+
+                hazardDomain.putPtr(curr.getRef(), hzCellIndex, 2*lvl+6);
                 succs[lvl] = curr;
             }
 
@@ -172,13 +180,15 @@ public:
     bool add(T value) {
         int topLvl = randomLevel();
         int botLvl = 0;
+        int hzCellIndex = hazardDomain.acquireCell();
         MarkableReference<Node<T>>* preds = new MarkableReference<Node<T>>[MAXHEIGHT];
         MarkableReference<Node<T>>* succs = new MarkableReference<Node<T>>[MAXHEIGHT];
 
         while(true) {
-            if(find(value, preds, succs)){
+            if(find(value, preds, succs, hzCellIndex)){
                 delete[] preds;
                 delete[] succs;
+                hazardDomain.releaseCell(hzCellIndex);
                 return false;
             }
 
@@ -189,6 +199,8 @@ public:
             MarkableReference<Node<T>> pred = preds[botLvl];
             MarkableReference<Node<T>> succ = succs[botLvl];
             newNode->nexts[botLvl]->store(succ);
+
+            hazardDomain.putPtr(newNode, hzCellIndex, 4);
             MarkableReference<Node<T>> markableNewNode(newNode, false);
             if(!pred.getRef()->nexts[botLvl]->compare_exchange_strong(succ, markableNewNode)) {
                 delete newNode;
@@ -196,41 +208,45 @@ public:
             }
             // linearization point
 
-            for (int lvl = botLvl+1; lvl < topLvl; ++lvl) {
+            for (int lvl = botLvl+1; lvl <= topLvl; ++lvl) {
                 while(true) {
                     pred = preds[lvl];
                     succ = succs[lvl];
                     if(pred.getRef()->nexts[lvl]->compare_exchange_strong(succ, markableNewNode)) {
                         break;
                     }
-                    find(value, preds, succs);
+                    find(value, preds, succs, hzCellIndex);
                 }
             }
 
             delete[] preds;
             delete[] succs;
+            hazardDomain.releaseCell(hzCellIndex);
             return true;
         }
     }
 
     bool remove(T value) {
         int botLvl = 0;
-
+        int hzCellIndex = hazardDomain.acquireCell();
         MarkableReference<Node<T>>* preds = new MarkableReference<Node<T>>[MAXHEIGHT];
         MarkableReference<Node<T>>* succs = new MarkableReference<Node<T>>[MAXHEIGHT];
         MarkableReference<Node<T>> succ;
 
         while(true) {
-            if(!find(value, preds, succs)) {
+            if(!find(value, preds, succs, hzCellIndex)) {
                 delete[] preds;
                 delete[] succs;
+                hazardDomain.releaseCell(hzCellIndex);
                 return false;
             }
 
+            hazardDomain.putPtr(succs[botLvl].getRef(), hzCellIndex, 4);
             Node<T>* toRemove = succs[botLvl].getRef();
             for (int lvl = toRemove->level; lvl >= botLvl+1; --lvl) {
                 succ = toRemove->nexts[lvl]->load();
                 while(!succ.getMark()) {
+                    hazardDomain.putPtr(succ.getRef(), hzCellIndex, 3);
                     MarkableReference<Node<T>> newSucc(succ.getRef(), true);
                     toRemove->nexts[lvl]->compare_exchange_strong(succ, newSucc);
                     succ = toRemove->nexts[lvl]->load();
@@ -239,23 +255,27 @@ public:
 
             succ = toRemove->nexts[botLvl]->load();
             while(true) {
+                hazardDomain.putPtr(succ.getRef(), hzCellIndex, 3);
                 MarkableReference<Node<T>> newSucc(succ.getRef(), true);
                 bool markedIt = toRemove->nexts[botLvl]->compare_exchange_strong(succ, newSucc);
                 // linearization point if markedIf == true
+                hazardDomain.putPtr(succs[botLvl].getRef(), hzCellIndex, 2);
                 succ = succs[botLvl].getRef()->nexts[botLvl]->load();
                 if(markedIt) {
-                    find(value, preds, succs);
+                    find(value, preds, succs, hzCellIndex);
 //                    cout << endl << "Deleting " << dec << toRemove->nexts[botLvl]->is_lock_free() << " " << toRemove->value << " " << hex << toRemove << endl;
 //                    delete toRemove; // TODO fix it
 //                    cout << "deleted" << endl;
-
+                    hazardDomain.deletePtr(toRemove, hzCellIndex);
                     delete[] preds;
                     delete[] succs;
+                    hazardDomain.releaseCell(hzCellIndex);
                     return true;
                 } else {
                     if(succ.getMark()) {
                         delete[] preds;
                         delete[] succs;
+                        hazardDomain.releaseCell(hzCellIndex);
                         return false;
                     }
                 }
