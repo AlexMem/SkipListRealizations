@@ -56,6 +56,7 @@ void routine2(ConcurrentSkipList<int>* list) {
     list->add(12);
     list->add(9);
     list->add(2);
+//    if(list->remove(-2)) cout << "removed -2" << endl;
     list->remove(-2);
     list->add(37);
     list->add(-44);
@@ -73,6 +74,7 @@ void routine3(ConcurrentSkipList<int>* list) {
     list->add(-9);
     list->add(63);
     list->add(17);
+//    if(list->remove(-2)) cout << "removed -2" << endl;
     list->remove(-2);
     list->add(-99);
     list->add(-47);
@@ -84,14 +86,14 @@ void randRoutine(ConcurrentSkipList<int>* list, int seed) {
     srand(seed);
     int added = 0;
     int removed = 0;
-    for (int i = 0; i < 255; ++i) {
+    for (int i = 0; i < 3000; ++i) {
         if(rand()%2) {
             list->add(rand()%20000)?added++:added;
         } else {
             list->remove(rand()%20000)?removed++:removed;
         }
     }
-//    cout << added << ' ' << removed << endl;
+    cout << added << ' ' << removed << endl;
 }
 
 void fixedTest(ConcurrentSkipList<int>* list) {
@@ -128,36 +130,23 @@ void repeatTest(int times) {
     for (int i = 0; i < times; ++i) {
         ConcurrentSkipList<int> list;
         randTest(&list);
-//        if(i%50 == 0) cout << i << endl;
-//        list.out();
+//        if(i%10 == 0) {
+//            cout << i << endl;
+//        }
+//        if(list.remove(-12)) cout << "removed -12" << endl;
+        list.print();
     }
 }
 
 
 int main() {
-//    ConcurrentSkipList<int> list;
-//    fixedTest(&list);
-//    list.print();
+//    bool mark = false;
+//    AtomicMarkableReference<int> ref(new int(5), true);
+//    int* ref5 = ref.getRefAndMark(mark);
+//    cout << ref5 << " " << mark << endl;
 
-//    repeatTest(1);
-    repeatTest(3577);
-
-//    int a;
-//    cin >> a;
-
-    /*int *a = new int;
-    int *b = new int;
-    *a = 5;
-    *b = 7;
-    MarkableReference<int> ma(a, false);
-    cout << &ma << endl;
-    atomic<MarkableReference<int>> ama(ma);
-    cout << ama.is_lock_free() << " " << *ama.load().getRef() << endl;
-    MarkableReference<int> _ma = ama.load();
-    cout << &_ma << endl;
-    MarkableReference<int> mb(b, false);
-    cout << ama.compare_exchange_strong(_ma, mb) << endl;
-    cout << ama.is_lock_free() << " " << *ama.load().getRef() << endl;*/
+    repeatTest(1);
+//    repeatTest(3577);
 
     return 0;
 }

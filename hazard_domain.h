@@ -1,11 +1,4 @@
-#ifndef CONCURRENTSKIPLIST_HAZARD_DOMAIN_H
-#define CONCURRENTSKIPLIST_HAZARD_DOMAIN_H
-
-#endif //CONCURRENTSKIPLIST_HAZARD_DOMAIN_H
-
 #include <atomic>
-
-using namespace std;
 
 template<class T> class HazardDomain {
     template<class E> class HazardCell {
@@ -13,47 +6,58 @@ template<class T> class HazardDomain {
         // 0 - pred
         // 1 - curr
         // 2 - succ
-        // 3 - [free]
-        // 4 - newNode/toRemove
-        // 5-44 - preds and succs
-        const static int numOfRefs = 45;
-        const static int numOfToDeleteRefs = 5;
+        // 3 - newNode/toRemove
+        // 4-(numOfRefs-1) - preds and succs
 
-        atomic<bool> isFree{true};
-        atomic<E*>* refs;
-        atomic<E*>* toDeleteRefs;
+        int currentToDeleteIndex;
 
-        HazardCell() {
-            refs = new atomic<E*>[numOfRefs]{nullptr};
-            toDeleteRefs = new atomic<E*>[numOfToDeleteRefs]{nullptr};
+        std::atomic<bool> isFree{true};
+        std::atomic<E*>* safeRefs;
+        std::atomic<E*>* deleteRefs;
+
+        explicit HazardCell(int numOfSafeRefs, int numOfDeleteRefs) {
+            currentToDeleteIndex = 0;
+            safeRefs = new std::atomic<E*>[numOfSafeRefs]{nullptr};
+            deleteRefs = new std::atomic<E*>[numOfDeleteRefs]{nullptr};
         }
 
         ~HazardCell(){
-            delete[] refs;
-            delete[] toDeleteRefs;
+            delete[] safeRefs;
+            delete[] deleteRefs;
         }
     };
 
 private:
-    int numOfCells;
-    HazardCell<T>* cells;
+    unsigned int numOfCells;
+
+    unsigned int numOfSafeRefsPerCell;
+    unsigned int numOfDeleteRefsPerCell;
+
+    HazardCell<T>** cells;
 
 public:
-    explicit HazardDomain(int maxNumOfThreads = 64) {
+    explicit HazardDomain(unsigned int numOfSafeRefs = 45, unsigned int maxNumOfThreads = 8) {
         numOfCells = maxNumOfThreads;
-        cells = new HazardCell<T>[numOfCells];
+        numOfSafeRefsPerCell = numOfSafeRefs;
+        numOfDeleteRefsPerCell = 2*numOfSafeRefs*maxNumOfThreads;
+
+        cells = new HazardCell<T>*[numOfCells];
+        for (int i = 0; i < numOfCells; ++i) {
+            cells[i] = new HazardCell<T>(numOfSafeRefsPerCell, numOfDeleteRefsPerCell);
+        }
     }
 
     ~HazardDomain() {
         T* p;
-        for (int i = 0; i < numOfCells; ++i) {
-            for (int j = 0; j < HazardCell<T>::numOfToDeleteRefs; ++j) {
-                p = cells[i].toDeleteRefs[j].load();
+        for (int i = numOfCells-1; i >= 0; i = --numOfCells-1) {
+            for (int j = 0; j < numOfDeleteRefsPerCell; ++j) {
+                p = cells[i]->deleteRefs[j].load();
                 if(p != nullptr) {
                     wipeToDeleteRef(p);
-                    delete p; // TODO HERE
+                    delete p;
                 }
             }
+            delete cells[i];
         }
         delete[] cells;
     }
@@ -62,8 +66,8 @@ public:
         bool cellIsFree;
         int i = 0;
         while(true) {
-            cellIsFree = cells[i].isFree.load();
-            if(cellIsFree && cells[i].isFree.compare_exchange_strong(cellIsFree, false)) {
+            cellIsFree = cells[i]->isFree.load();
+            if(cellIsFree && cells[i]->isFree.compare_exchange_strong(cellIsFree, false)) {
                 break;
             }
             i = (i+1)%numOfCells;
@@ -71,61 +75,47 @@ public:
         return i;
     }
 
-    void putPtr(T* ptr, int cellIndex, int refIndex) {
-        cells[cellIndex].refs[refIndex].store(ptr);
+    void releaseCell(int cellIndex) {
+        for (int i = 0; i < numOfSafeRefsPerCell; ++i) {
+            cells[cellIndex]->safeRefs[i].store(nullptr);
+        }
+        cells[cellIndex]->isFree.store(true);
+    }
+
+    T* protect(T* ptr, int cellIndex, int refIndex) {
+        cells[cellIndex]->safeRefs[refIndex].store(ptr);
+        return ptr;
     }
 
     void deletePtr(T* ptr, int hzExceptCellIndex) {
-        if(!putToDeleteRefs(ptr, hzExceptCellIndex)) {
-            T* p;
-            for (int i = 0; i < HazardCell<T>::numOfToDeleteRefs; ++i) {
-                p = cells[hzExceptCellIndex].toDeleteRefs[i].load();
-                if(!containsPtrExcept(p, hzExceptCellIndex)) {
-                    cells[hzExceptCellIndex].toDeleteRefs[i].store(nullptr);
+        int currIndex = cells[hzExceptCellIndex]->currentToDeleteIndex;
+        T* p = cells[hzExceptCellIndex]->deleteRefs[currIndex].load();
+        if(p == nullptr) {
+            cells[hzExceptCellIndex]->deleteRefs[currIndex].store(ptr);
+        } else {
+            while(true) {
+                if (!containsPtrExcept(p, hzExceptCellIndex)) {
+                    cells[hzExceptCellIndex]->deleteRefs[currIndex].store(ptr);
                     delete p;
+                    break;
                 }
+                currIndex = (currIndex+1)%numOfDeleteRefsPerCell;
+                p = cells[hzExceptCellIndex]->deleteRefs[currIndex].load();
             }
-            putToDeleteRefs(ptr, hzExceptCellIndex);
         }
-    }
-
-    void releaseCell(int cellIndex) {
-        for (int i = 0; i < HazardCell<T>::numOfRefs; ++i) {
-            cells[cellIndex].refs[i].store(nullptr);
-        }
-        cells[cellIndex].isFree.store(true);
+        currIndex = (currIndex+1)%numOfDeleteRefsPerCell;
+        cells[hzExceptCellIndex]->currentToDeleteIndex = currIndex;
     }
 
 private:
     bool containsPtrExcept(T* ptr, int hzExceptCellIndex) {
         for (int i = 0; i < numOfCells; ++i) {
-            if(i != hzExceptCellIndex && !cells[i].isFree.load()) {
-                for (int j = 0; j < HazardCell<T>::numOfRefs; ++j) {
-                    if(cells[i].refs[j].load() == ptr) {
+            if(i != hzExceptCellIndex && !cells[i]->isFree.load()) {
+                for (int j = 0; j < numOfSafeRefsPerCell; ++j) {
+                    if(cells[i]->safeRefs[j].load() == ptr) {
                         return true;
                     }
                 }
-            }
-        }
-        return false;
-    }
-
-    bool containsToDeleteRef(T* ptr, int hzExceptCellIndex) {
-        for (int i = 0; i < numOfCells; ++i) {
-                for (int j = 0; j < HazardCell<T>::numOfRefs; ++j) {
-                    if(cells[i].refs[j].load() == ptr) {
-                        return true;
-                    }
-                }
-        }
-        return false;
-    }
-
-    bool putToDeleteRefs(T *ptr, int cellIndex) {
-        for (int i = 0; i < HazardCell<T>::numOfToDeleteRefs; ++i) {
-            if(cells[cellIndex].toDeleteRefs[i].load() == nullptr) {
-                cells[cellIndex].toDeleteRefs[i].store(ptr);
-                return true;
             }
         }
         return false;
@@ -134,12 +124,37 @@ private:
     void wipeToDeleteRef(T* ptr) {
         T* p;
         for (int i = 0; i < numOfCells; ++i) {
-            for (int j = 0; j < HazardCell<T>::numOfToDeleteRefs; ++j) {
-                p = cells[i].toDeleteRefs[j].load();
+            for (int j = 0; j < numOfDeleteRefsPerCell; ++j) {
+                p = cells[i]->deleteRefs[j].load();
                 if(p == ptr) {
-                    cells[i].toDeleteRefs[j].store(nullptr);
+                    cells[i]->deleteRefs[j].store(nullptr);
                 }
             }
         }
+    }
+
+//UNUSED
+    /*void deletePtr(T* ptr, int hzExceptCellIndex) {
+        if(!putToDeleteRefs(ptr, hzExceptCellIndex)) {
+            T* p;
+            for (int i = 0; i < numOfDeleteRefsPerCell; ++i) {
+                p = cells[hzExceptCellIndex]->deleteRefs[i].load();
+                if(!containsPtrExcept(p, hzExceptCellIndex)) {
+                    cells[hzExceptCellIndex]->deleteRefs[i].store(nullptr);
+                    delete p;
+                }
+            }
+            putToDeleteRefs(ptr, hzExceptCellIndex);
+        }
+    }*/
+
+    bool putToDeleteRefs(T *ptr, int cellIndex) {
+        for (int i = 0; i < numOfDeleteRefsPerCell; ++i) {
+            if(cells[cellIndex]->deleteRefs[i].load() == nullptr) {
+                cells[cellIndex]->deleteRefs[i].store(ptr);
+                return true;
+            }
+        }
+        return false;
     }
 };
