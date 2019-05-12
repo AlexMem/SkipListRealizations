@@ -48,7 +48,7 @@ public:
         for(int i = 0; i < maxHeight; ++i) {
             head->nexts[i].setVal(tail, false);
         }
-        hazardDomain = new HazardDomain<Node<T>>(2*maxHeight+5, maxNumOfThreads);
+        hazardDomain = new HazardDomain<Node<T>>(2*maxHeight+4, maxNumOfThreads);
     }
 
 //DESTRUCTOR
@@ -78,8 +78,8 @@ public:
             curr = hazardDomain->protect(pred->nexts[lvl].getRef(), hzCellIndex, 1);
             while(true) {
                 succ = hazardDomain->protect(curr->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
-                while(curr != tail && mark) { // optimization?
-                    curr = hazardDomain->protect(pred->nexts[lvl].getRef(), hzCellIndex, 1);;
+                while(curr != tail && mark) {
+                    curr = hazardDomain->protect(curr->nexts[lvl].getRef(), hzCellIndex, 1);
                     succ = hazardDomain->protect(curr->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
                 }
                 if(compare(curr, value) < 0) {

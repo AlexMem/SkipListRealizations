@@ -39,7 +39,7 @@ public:
     explicit HazardDomain(unsigned int numOfSafeRefs = 45, unsigned int maxNumOfThreads = 8) {
         numOfCells = maxNumOfThreads;
         numOfSafeRefsPerCell = numOfSafeRefs;
-        numOfDeleteRefsPerCell = 2*numOfSafeRefs*maxNumOfThreads;
+        numOfDeleteRefsPerCell = (unsigned int)1.5*numOfSafeRefs*maxNumOfThreads;
 
         cells = new HazardCell<T>*[numOfCells];
         for (int i = 0; i < numOfCells; ++i) {
