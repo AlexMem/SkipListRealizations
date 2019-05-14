@@ -91,14 +91,14 @@ void randRoutine(ConcurrentSkipList<int>* list, int seed) {
     srand(seed);
     int added = 0;
     int removed = 0;
-    for (int i = 0; i < 3000; ++i) {
+    for (int i = 0; i < 5000; ++i) {
         if(rand()%2) {
             list->add(rand()%20000)?added++:added;
         } else {
             list->remove(rand()%20000)?removed++:removed;
         }
     }
-    cout << added << ' ' << removed << endl;
+//    cout << added << ' ' << removed << endl;
 }
 
 void fixedTest(ConcurrentSkipList<int>* list) {
@@ -134,13 +134,13 @@ void randTest(ConcurrentSkipList<int>* list) {
 void repeatTest(int times) {
     for (int i = 0; i < times; ++i) {
         ConcurrentSkipList<int> list;
-        fixedTest(&list);
-//        if(i%10 == 0) {
-//            cout << i << endl;
-//        }
+        randTest(&list);
+        if(i%10 == 0) {
+            cout << i << endl;
+        }
 //        if(list.remove(-12)) cout << "removed -12" << endl;
-        list.print();
-        cout << "Contains -12 = " << list.contains(-12) << endl;
+//        list.print();
+//        cout << "Contains -12 = " << list.contains(-12) << endl;
     }
 }
 
@@ -218,22 +218,12 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
     }
 }
 
-
-
-int main() {
-//    bool mark = false;
-//    AtomicMarkableReference<int> ref(new int(5), true);
-//    int* ref5 = ref.getRefAndMark(mark);
-//    cout << ref5 << " " << mark << endl;
-
-//    repeatTest(1);
-//    repeatTest(3577);
-
+void runExperiments() {
     int numOfOperations = 5000;
     ofstream file("results.txt");
     if(!file.is_open()) {
         cout << "Cannot create/open file result.txt" << endl;
-        return -1;
+        return;
     }
 
     cout.setf(ios::fixed);
@@ -263,5 +253,19 @@ int main() {
                                                     // 33% - remove
 
     file.close();
+}
+
+
+
+int main() {
+//    bool mark = false;
+//    AtomicMarkableReference<int> ref(new int(5), true);
+//    int* ref5 = ref.getRefAndMark(mark);
+//    cout << ref5 << " " << mark << endl;
+
+//    repeatTest(1);
+    repeatTest(3577);
+//    runExperiments();
+
     return 0;
 }

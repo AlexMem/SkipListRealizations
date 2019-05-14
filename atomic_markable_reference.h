@@ -12,19 +12,19 @@ public:
     }
 
     V* getRef() {
-        return (V*)(val.load() & ~mask);
+        return (V*)(val.load(std::memory_order_acquire) & ~mask);
     }
 
     bool getMark() {
-        return static_cast<bool>(val.load() & mask);
+        return static_cast<bool>(val.load(std::memory_order_acquire) & mask);
     }
 
     uintptr_t getVal() {
-        return val.load();
+        return val.load(std::memory_order_acquire);
     }
 
     V* getRefAndMark(bool& mark) {
-        uintptr_t _val = val.load();
+        uintptr_t _val = val.load(std::memory_order_acquire);
         mark = static_cast<bool>(_val & mask);
         return (V*)(_val & ~mask);
     }

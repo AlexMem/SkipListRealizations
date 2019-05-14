@@ -51,9 +51,9 @@ public:
         T* p;
         for (int i = numOfCells-1; i >= 0; i = --numOfCells-1) {
             for (int j = 0; j < numOfDeleteRefsPerCell; ++j) {
-                p = cells[i]->deleteRefs[j].load();
+                p = cells[i]->deleteRefs[j].load(std::memory_order_relaxed);
                 if(p != nullptr) {
-                    wipeToDeleteRef(p);
+                    wipeDeleteRef(p);
                     delete p;
                 }
             }
@@ -66,8 +66,8 @@ public:
         bool cellIsFree;
         int i = 0;
         while(true) {
-            cellIsFree = cells[i]->isFree.load();
-            if(cellIsFree && cells[i]->isFree.compare_exchange_strong(cellIsFree, false)) {
+            cellIsFree = cells[i]->isFree.load(std::memory_order_acquire);
+            if(cellIsFree && cells[i]->isFree.compare_exchange_strong(cellIsFree, false, std::memory_order_release)) {
                 break;
             }
             i = (i+1)%numOfCells;
@@ -77,21 +77,39 @@ public:
 
     void releaseCell(int cellIndex) {
         for (int i = 0; i < numOfSafeRefsPerCell; ++i) {
-            cells[cellIndex]->safeRefs[i].store(nullptr);
+            cells[cellIndex]->safeRefs[i].store(nullptr, std::memory_order_relaxed);
         }
-        cells[cellIndex]->isFree.store(true);
+        cells[cellIndex]->isFree.store(true, std::memory_order_release);
     }
 
     T* protect(T* ptr, int cellIndex, int refIndex) {
-        cells[cellIndex]->safeRefs[refIndex].store(ptr);
+        cells[cellIndex]->safeRefs[refIndex].store(ptr, std::memory_order_release);
+        return ptr;
+    }
+
+    T* protectWithValidation(AtomicMarkableReference<T> &sourceRef, int cellIndex, int refIndex) {
+        T* ptr;
+        do {
+            ptr = sourceRef.getRef();
+            cells[cellIndex]->safeRefs[refIndex].store(ptr);
+        } while(sourceRef.getRef() != ptr);
+        return ptr;
+    }
+
+    T* protectWithValidation(AtomicMarkableReference<T> &sourceRef, bool &mark, int cellIndex, int refIndex) {
+        T* ptr;
+        do {
+            ptr = sourceRef.getRefAndMark(mark);
+            cells[cellIndex]->safeRefs[refIndex].store(ptr);
+        } while(sourceRef.getRef() != ptr);
         return ptr;
     }
 
     void deletePtr(T* ptr, int hzExceptCellIndex) {
         int currIndex = cells[hzExceptCellIndex]->currentToDeleteIndex;
-        T* p = cells[hzExceptCellIndex]->deleteRefs[currIndex].load();
+        T* p = cells[hzExceptCellIndex]->deleteRefs[currIndex].load(std::memory_order_acquire);
         if(p == nullptr) {
-            cells[hzExceptCellIndex]->deleteRefs[currIndex].store(ptr);
+            cells[hzExceptCellIndex]->deleteRefs[currIndex].store(ptr, std::memory_order_release);
         } else {
             while(true) {
                 if (!containsPtrExcept(p, hzExceptCellIndex)) {
@@ -100,7 +118,7 @@ public:
                     break;
                 }
                 currIndex = (currIndex+1)%numOfDeleteRefsPerCell;
-                p = cells[hzExceptCellIndex]->deleteRefs[currIndex].load();
+                p = cells[hzExceptCellIndex]->deleteRefs[currIndex].load(std::memory_order_relaxed); // TODO mb danger
             }
         }
         currIndex = (currIndex+1)%numOfDeleteRefsPerCell;
@@ -110,9 +128,9 @@ public:
 private:
     bool containsPtrExcept(T* ptr, int hzExceptCellIndex) {
         for (int i = 0; i < numOfCells; ++i) {
-            if(i != hzExceptCellIndex && !cells[i]->isFree.load()) {
+            if(i != hzExceptCellIndex && !cells[i]->isFree.load(std::memory_order_relaxed)) {
                 for (int j = 0; j < numOfSafeRefsPerCell; ++j) {
-                    if(cells[i]->safeRefs[j].load() == ptr) {
+                    if(cells[i]->safeRefs[j].load(std::memory_order_relaxed) == ptr) {
                         return true;
                     }
                 }
@@ -121,13 +139,13 @@ private:
         return false;
     }
 
-    void wipeToDeleteRef(T* ptr) {
+    void wipeDeleteRef(T *ptr) {
         T* p;
         for (int i = 0; i < numOfCells; ++i) {
             for (int j = 0; j < numOfDeleteRefsPerCell; ++j) {
-                p = cells[i]->deleteRefs[j].load();
+                p = cells[i]->deleteRefs[j].load(std::memory_order_acquire);
                 if(p == ptr) {
-                    cells[i]->deleteRefs[j].store(nullptr);
+                    cells[i]->deleteRefs[j].store(nullptr, std::memory_order_release);
                 }
             }
         }

@@ -108,17 +108,17 @@ public:
         while (true) {
             pred = hazardDomain->protect(head, hzCellIndex, 0);
             for (int lvl = maxHeight-1; lvl >= botLvl; --lvl) {
-                curr = hazardDomain->protect(pred->nexts[lvl].getRef(), hzCellIndex, 1);
+                curr = hazardDomain->protectWithValidation(pred->nexts[lvl], hzCellIndex, 1);
                 // linearization point if lvl == 0
                 while (true) {
-                    succ = hazardDomain->protect(curr->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
+                    succ = hazardDomain->protectWithValidation(curr->nexts[lvl], mark, hzCellIndex, 2);
                     while (curr != tail && mark){
                         if(!pred->nexts[lvl].CAS(curr, succ, false, false)) {
                             goto retry;
                         }
-                        curr = hazardDomain->protect(pred->nexts[lvl].getRef(), hzCellIndex, 1);
+                        curr = hazardDomain->protectWithValidation(pred->nexts[lvl], hzCellIndex, 1);
                         // linearization point if lvl == 0
-                        succ = hazardDomain->protect(curr->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
+                        succ = hazardDomain->protectWithValidation(curr->nexts[lvl], mark, hzCellIndex, 2);
                     }
 
                     if(compare(curr, value) < 0) {
@@ -204,7 +204,7 @@ public:
             for (int lvl = toRemove->level; lvl >= botLvl+1; --lvl) {
                 succ = hazardDomain->protect(toRemove->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
                 while(!mark) {
-                    toRemove->nexts[lvl].CAS(succ, succ, mark, true);
+                    toRemove->nexts[lvl].CAS(succ, succ, false, true);
                     succ = hazardDomain->protect(toRemove->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
                 }
             }
