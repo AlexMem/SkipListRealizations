@@ -9,6 +9,32 @@
 
 using namespace std;
 
+struct HighResClock {
+    typedef long long                               rep;
+    typedef std::nano                               period;
+    typedef std::chrono::duration<rep, period>      duration;
+    typedef std::chrono::time_point<HighResClock>   time_point;
+    static const bool is_steady = true;
+
+    static time_point now();
+};
+
+namespace {
+    const long long g_Frequency = []() -> long long {
+        LARGE_INTEGER frequency;
+        QueryPerformanceFrequency(&frequency);
+        return frequency.QuadPart;
+    }();
+}
+
+HighResClock::time_point HighResClock::now() {
+    LARGE_INTEGER count;
+    QueryPerformanceCounter(&count);
+    return time_point(duration(count.QuadPart * static_cast<rep>(period::den) / g_Frequency));
+}
+
+
+
 std::random_device rd;
 
 void randInit(ConcurrentSkipList<int> *list) {
@@ -133,13 +159,13 @@ void randTest(ConcurrentSkipList<int>* list) {
 
 void repeatTest(int times) {
     for (int i = 0; i < times; ++i) {
-        ConcurrentSkipList<int> list;
+        ConcurrentSkipList<int> list(100, 8, 0.9);
         randTest(&list);
-        if(i%10 == 0) {
-            cout << i << endl;
-        }
+//        if(i%10 == 0) {
+//            cout << i << endl;
+//        }
 //        if(list.remove(-12)) cout << "removed -12" << endl;
-//        list.print();
+        list.print();
 //        cout << "Contains -12 = " << list.contains(-12) << endl;
     }
 }
@@ -175,14 +201,44 @@ void experimentRoutine(ConcurrentSkipList<int>* list, int numOfOperations, doubl
 //    cout << time << endl;
 }
 
-double experiment(double p, unsigned int maxHeight, unsigned int numOfThreads, int numOfOperations, double b1, double b2) {
+void experimentRoutineThroughput(ConcurrentSkipList<int>* list, int numOfOperations, double b1, double b2, long long int& time) {
+    std::mt19937 mt(rd());
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    double decision;
+    HighResClock::time_point start;
+    HighResClock::duration total = HighResClock::duration();
+//    total -= total;
+    for (int i = 0; i < numOfOperations; ++i) {
+        decision = dist(mt);
+        if(decision < b1) {
+            start = HighResClock::now();
+            list->contains(rd()%30000);
+            total += HighResClock::now() - start;
+        } else {
+            if(decision < b2) {
+                start = HighResClock::now();
+                list->add(rd()%30000);
+                total += HighResClock::now() - start;
+            } else {
+                start = HighResClock::now();
+                list->remove(rd()%30000);
+                total += HighResClock::now() - start;
+            }
+        }
+    }
+    time = total.count();
+//    cout << time << endl;
+}
+
+long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThreads, int numOfOperations, double b1, double b2) {
     ConcurrentSkipList<int> list(maxHeight, numOfThreads, p);
     randInit(&list);
-    double result = 0.0;
-    double* times = new double[numOfThreads];
+    long long int result = 0;
+    long long int summary = 0;
+    long long int* times = new long long int[numOfThreads];
     std::thread** threads = new std::thread*[numOfThreads];
     for (int i = 0; i < numOfThreads; ++i) {
-        threads[i] = new std::thread(experimentRoutine, &list, numOfOperations, b1, b2, times[i]);
+        threads[i] = new std::thread(experimentRoutineThroughput, &list, numOfOperations, b1, b2, times[i]);
     }
     for (int i = 0; i < numOfThreads; ++i) {
         threads[i]->join();
@@ -190,16 +246,17 @@ double experiment(double p, unsigned int maxHeight, unsigned int numOfThreads, i
 
     for (int i = 0; i < numOfThreads; ++i) {
 //        cout << times[i] << endl;
-        result += times[i];
+        summary += times[i];
     }
-    result /= numOfOperations*numOfThreads;
+
+    result = (long long int)((numOfThreads*numOfOperations)/((long double)summary/1000000000));
 //    list.print();
     return result;
 }
 
 void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
     double p = 0.5;
-    double result;
+    long long int result;
 
     for(int i = 0; i < 5; ++i) {
         file << "p = " << p << endl;
@@ -207,7 +264,7 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
             cout << "p = " << p << ", maxHeight = " << maxHeight << endl;
             for (unsigned int k = 1; k <= 32; k *= 2) {
                 result = experiment(p, maxHeight, k, numOfOperations, b1, b2);
-                cout << '\t' << result << " s" <<  endl;
+                cout << '\t' << result <<  endl;
                 file << result << '\t';
             }
             cout << endl;
@@ -220,7 +277,7 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
 
 void runExperiments() {
     int numOfOperations = 5000;
-    ofstream file("results.txt");
+    ofstream file("resultsThroughput.txt");
     if(!file.is_open()) {
         cout << "Cannot create/open file result.txt" << endl;
         return;
@@ -230,9 +287,6 @@ void runExperiments() {
     file.setf(ios::fixed);
     cout.precision(9);
     file.precision(9);
-
-    cout << "Time in seconds" << endl << endl;
-    file << "Time in seconds" << endl << endl;
 
     cout << "90%/5%/5%" << endl;
     file << "90%/5%/5%" << endl;
@@ -245,6 +299,12 @@ void runExperiments() {
     experiments(0.8, 0.9, numOfOperations, file);   // 80% - contains
                                                     // 10% - add
                                                     // 10% - remove
+
+    cout << endl <<  "60%/20%/20%" << endl;
+    file << endl <<  "60%/20%/20%" << endl;
+    experiments(0.6, 0.8, numOfOperations, file);   // 60% - contains
+                                                    // 20% - add
+                                                    // 20% - remove
 
     cout << endl <<  "33%/33%/33%" << endl;
     file << endl <<  "33%/33%/33%" << endl;
@@ -263,8 +323,8 @@ int main() {
 //    int* ref5 = ref.getRefAndMark(mark);
 //    cout << ref5 << " " << mark << endl;
 
-//    repeatTest(1);
-    repeatTest(3577);
+    repeatTest(1);
+//    repeatTest(3577);
 //    runExperiments();
 
     return 0;

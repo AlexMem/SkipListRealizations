@@ -1,7 +1,6 @@
 #include <iostream>
 #include <random>
 #include "atomic_markable_reference.h"
-#include "hazard_domain.h"
 
 template <class T> class ConcurrentSkipList {
     template <class E> class Node {
@@ -9,6 +8,8 @@ template <class T> class ConcurrentSkipList {
         E value;
         unsigned int level;
         AtomicMarkableReference<Node<E>>* nexts;
+
+        std::atomic<Node<E>*> nextFree{nullptr};
 
         explicit Node(unsigned int lvl) {
             nexts = new AtomicMarkableReference<Node<E>>[lvl+1];
@@ -26,6 +27,33 @@ template <class T> class ConcurrentSkipList {
         }
     };
 
+    class FreeList {
+        std::atomic<Node<T>*> freeListHead{nullptr};
+        std::atomic<Node<T>*> freeListTail{nullptr};
+    public:
+        FreeList() {
+            Node<T>* headNode = new Node<T>(0);
+            freeListHead.store(headNode);
+            freeListTail.store(headNode);
+        }
+
+        void add(Node<T>* newNode) {
+            Node<T>* currentTail;
+            do {
+                currentTail = freeListTail.load();
+            } while (!freeListTail.compare_exchange_strong(currentTail, newNode));
+            currentTail->nextFree.store(newNode);
+        }
+
+        ~FreeList() {
+            for (Node<T>* p = freeListHead.load(); p != nullptr; p = freeListHead.load()) {
+                freeListHead.store(freeListHead.load()->nextFree.load());
+                delete p;
+            }
+        }
+
+    };
+
 // FIELDS
 private:
     double P;
@@ -33,7 +61,7 @@ private:
 
     std::random_device randomDevice;
 
-    HazardDomain<Node<T>>* hazardDomain;
+    FreeList freeList;
 
     Node<T>* head;
     Node<T>* tail;
@@ -48,7 +76,6 @@ public:
         for(int i = 0; i < maxHeight; ++i) {
             head->nexts[i].setVal(tail, false);
         }
-        hazardDomain = new HazardDomain<Node<T>>(2*maxHeight+4, maxNumOfThreads);
     }
 
 //DESTRUCTOR
@@ -60,7 +87,6 @@ public:
             delete toDel;
         }
         delete tail;
-        delete hazardDomain;
     }
 
 // PUBLIC METHODS
@@ -68,35 +94,32 @@ public:
     bool contains(T value) {
         int botLvl = 0;
         bool mark;
-        int hzCellIndex = hazardDomain->acquireCell();
 
-        Node<T>* pred = hazardDomain->protect(head, hzCellIndex, 0);
+        Node<T>* pred = head;
         Node<T>* curr;
         Node<T>* succ;
 
         for (int lvl = maxHeight-1; lvl >= botLvl; --lvl) {
-            curr = hazardDomain->protect(pred->nexts[lvl].getRef(), hzCellIndex, 1);
+            curr = pred->nexts[lvl].getRef();
             while(true) {
-                succ = hazardDomain->protect(curr->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
+                succ = curr->nexts[lvl].getRefAndMark(mark);
                 while(curr != tail && mark) {
-                    curr = hazardDomain->protect(curr->nexts[lvl].getRef(), hzCellIndex, 1);
-                    succ = hazardDomain->protect(curr->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
+                    curr = curr->nexts[lvl].getRef();
+                    succ = curr->nexts[lvl].getRefAndMark(mark);
                 }
                 if(compare(curr, value) < 0) {
-                    pred = hazardDomain->protect(curr, hzCellIndex, 0);
-                    curr = hazardDomain->protect(succ, hzCellIndex, 1);
+                    pred = curr;
+                    curr = succ;
                 } else {
                     break;
                 }
             }
         }
 
-        bool result = (compare(curr, value) == 0);
-        hazardDomain->releaseCell(hzCellIndex);
-        return result;
+        return compare(curr, value) == 0;
     }
 
-    bool find(T value, Node<T>** preds, Node<T>** succs, int hzCellIndex) {
+    bool find(T value, Node<T>** preds, Node<T>** succs) {
         int botLvl = 0;
         bool mark;
 
@@ -106,31 +129,31 @@ public:
 
     retry:
         while (true) {
-            pred = hazardDomain->protect(head, hzCellIndex, 0);
+            pred = head;
             for (int lvl = maxHeight-1; lvl >= botLvl; --lvl) {
-                curr = hazardDomain->protectWithValidation(pred->nexts[lvl], hzCellIndex, 1);
+                curr = pred->nexts[lvl].getRef();
                 // linearization point if lvl == 0
                 while (true) {
-                    succ = hazardDomain->protectWithValidation(curr->nexts[lvl], mark, hzCellIndex, 2);
+                    succ = curr->nexts[lvl].getRefAndMark(mark);
                     while (curr != tail && mark){
                         if(!pred->nexts[lvl].CAS(curr, succ, false, false)) {
                             goto retry;
                         }
-                        curr = hazardDomain->protectWithValidation(pred->nexts[lvl], hzCellIndex, 1);
+                        curr = pred->nexts[lvl].getRef();
                         // linearization point if lvl == 0
-                        succ = hazardDomain->protectWithValidation(curr->nexts[lvl], mark, hzCellIndex, 2);
+                        succ = curr->nexts[lvl].getRefAndMark(mark);
                     }
 
                     if(compare(curr, value) < 0) {
-                        pred = hazardDomain->protect(curr, hzCellIndex, 0);
-                        curr = hazardDomain->protect(succ, hzCellIndex, 1);
+                        pred = curr;
+                        curr = succ;
                     } else {
                         break;
                     }
                 }
 
-                preds[lvl] = hazardDomain->protect(pred, hzCellIndex, 2 * lvl + 4);
-                succs[lvl] = hazardDomain->protect(curr, hzCellIndex, 2 * lvl + 5);
+                preds[lvl] = pred;
+                succs[lvl] = curr;
             }
 
             return compare(curr, value) == 0;
@@ -140,15 +163,13 @@ public:
     bool add(T value) {
         unsigned int topLvl = getRandomLevel();
         int botLvl = 0;
-        int hzCellIndex = hazardDomain->acquireCell();
         Node<T>** preds = new Node<T>*[maxHeight];
         Node<T>** succs = new Node<T>*[maxHeight];
 
         while(true) {
-            if(find(value, preds, succs, hzCellIndex)){
+            if(find(value, preds, succs)){
                 delete[] preds;
                 delete[] succs;
-                hazardDomain->releaseCell(hzCellIndex);
                 return false;
             }
 
@@ -159,7 +180,6 @@ public:
             Node<T>* pred = preds[botLvl];
             Node<T>* succ = succs[botLvl];
 
-            hazardDomain->protect(newNode, hzCellIndex, 3);
             if(!pred->nexts[botLvl].CAS(succ, newNode, false, false)) {
                 delete newNode;
                 continue;
@@ -173,13 +193,12 @@ public:
                     if(pred->nexts[lvl].CAS(succ, newNode, false, false)) {
                         break;
                     }
-                    find(value, preds, succs, hzCellIndex);
+                    find(value, preds, succs);
                 }
             }
 
             delete[] preds;
             delete[] succs;
-            hazardDomain->releaseCell(hzCellIndex);
             return true;
         }
     }
@@ -187,45 +206,41 @@ public:
     bool remove(T value) {
         bool mark;
         int botLvl = 0;
-        int hzCellIndex = hazardDomain->acquireCell();
         Node<T>** preds = new Node<T>*[maxHeight];
         Node<T>** succs = new Node<T>*[maxHeight];
         Node<T>* succ;
 
         while(true) {
-            if(!find(value, preds, succs, hzCellIndex)) {
+            if(!find(value, preds, succs)) {
                 delete[] preds;
                 delete[] succs;
-                hazardDomain->releaseCell(hzCellIndex);
                 return false;
             }
 
-            Node<T>* toRemove = hazardDomain->protect(succs[botLvl], hzCellIndex, 3);
+            Node<T>* toRemove = succs[botLvl];
             for (int lvl = toRemove->level; lvl >= botLvl+1; --lvl) {
-                succ = hazardDomain->protect(toRemove->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
+                succ = toRemove->nexts[lvl].getRefAndMark(mark);
                 while(!mark) {
                     toRemove->nexts[lvl].CAS(succ, succ, false, true);
-                    succ = hazardDomain->protect(toRemove->nexts[lvl].getRefAndMark(mark), hzCellIndex, 2);
+                    succ = toRemove->nexts[lvl].getRefAndMark(mark);
                 }
             }
 
-            succ = hazardDomain->protect(toRemove->nexts[botLvl].getRefAndMark(mark), hzCellIndex, 2);
+            succ = toRemove->nexts[botLvl].getRefAndMark(mark);
             while(true) {
                 bool markedIt = toRemove->nexts[botLvl].CAS(succ, succ, false, true);
                 // linearization point if markedIf == true
-                succ = hazardDomain->protect(succs[botLvl]->nexts[botLvl].getRefAndMark(mark), hzCellIndex, 2);
+                succ = succs[botLvl]->nexts[botLvl].getRefAndMark(mark);
                 if(markedIt) {
-                    find(value, preds, succs, hzCellIndex);
-                    hazardDomain->deletePtr(toRemove, hzCellIndex);
+                    find(value, preds, succs);
+                    freeList.add(toRemove);
                     delete[] preds;
                     delete[] succs;
-                    hazardDomain->releaseCell(hzCellIndex);
                     return true;
                 } else {
                     if(mark) {
                         delete[] preds;
                         delete[] succs;
-                        hazardDomain->releaseCell(hzCellIndex);
                         return false;
                     }
                 }
@@ -235,11 +250,19 @@ public:
 
     void print() {
         int i = 0;
+        int minLvl = maxHeight;
+        int maxLvl = 0;
         for (Node<T> *p = head; p!=tail; p=p->nexts[0].getRef()) {
             if(p == head) {
                 std::cout << i++ << ".\th [" << p->level << "]\t->\t";
             } else {
                 std::cout << i++ << ".\t" << p->value << " [" << p->level << "]\t->\t";
+                if(p->level < minLvl) {
+                    minLvl = p->level;
+                }
+                if(p->level > maxLvl) {
+                    maxLvl = p->level;
+                }
             }
             for (int j = 0; j <= p->level; ++j) {
                 if(p->nexts[j].getRef() != tail) {
@@ -250,6 +273,8 @@ public:
             }
             std::cout << std::endl;
         }
+        std::cout << "minLvl: " << minLvl << std::endl;
+        std::cout << "maxLvl: " << maxLvl << std::endl;
     }
 
     void checkForLockFree() {

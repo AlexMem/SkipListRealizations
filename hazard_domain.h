@@ -1,4 +1,5 @@
 #include <atomic>
+#include "atomic_markable_reference.h"
 
 template<class T> class HazardDomain {
     template<class E> class HazardCell {
