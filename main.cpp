@@ -23,6 +23,7 @@ namespace {
     const long long g_Frequency = []() -> long long {
         LARGE_INTEGER frequency;
         QueryPerformanceFrequency(&frequency);
+//        cout << frequency.QuadPart << endl;
         return frequency.QuadPart;
     }();
 }
@@ -30,6 +31,7 @@ namespace {
 HighResClock::time_point HighResClock::now() {
     LARGE_INTEGER count;
     QueryPerformanceCounter(&count);
+//    cout << count.QuadPart << " " << static_cast<rep>(period::den) << endl;
     return time_point(duration(count.QuadPart * static_cast<rep>(period::den) / g_Frequency));
 }
 
@@ -201,69 +203,61 @@ void experimentRoutine(ConcurrentSkipList<int>* list, int numOfOperations, doubl
 //    cout << time << endl;
 }
 
-void experimentRoutineThroughput(ConcurrentSkipList<int>* list, int numOfOperations, double b1, double b2, long long int& time) {
+void experimentRoutineThroughput(ConcurrentSkipList<int>* list, int numOfOperations, int topBound, double b1, double b2) {
     std::mt19937 mt(rd());
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     double decision;
-    HighResClock::time_point start;
-    HighResClock::duration total = HighResClock::duration();
-//    total -= total;
     for (int i = 0; i < numOfOperations; ++i) {
         decision = dist(mt);
         if(decision < b1) {
-            start = HighResClock::now();
-            list->contains(rd()%30000);
-            total += HighResClock::now() - start;
+            list->contains(rd()%topBound);
         } else {
             if(decision < b2) {
-                start = HighResClock::now();
-                list->add(rd()%30000);
-                total += HighResClock::now() - start;
+                list->add(rd()%topBound);
             } else {
-                start = HighResClock::now();
-                list->remove(rd()%30000);
-                total += HighResClock::now() - start;
+                list->remove(rd()%topBound);
             }
         }
     }
-    time = total.count();
-//    cout << time << endl;
 }
 
-long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThreads, int numOfOperations, double b1, double b2) {
+long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThreads, int numOfOperations, int topBound, double b1, double b2) {
     ConcurrentSkipList<int> list(maxHeight, numOfThreads, p);
     randInit(&list);
     long long int result = 0;
-    long long int summary = 0;
-    long long int* times = new long long int[numOfThreads];
+    HighResClock::time_point start;
+    long long int total = 0;
     std::thread** threads = new std::thread*[numOfThreads];
+    start = HighResClock::now();
     for (int i = 0; i < numOfThreads; ++i) {
-        threads[i] = new std::thread(experimentRoutineThroughput, &list, numOfOperations, b1, b2, times[i]);
+        threads[i] = new std::thread(experimentRoutineThroughput, &list, numOfOperations, topBound, b1, b2);
     }
     for (int i = 0; i < numOfThreads; ++i) {
         threads[i]->join();
     }
+    total = (HighResClock::now()-start).count();
+//    cout << numOfThreads*numOfOperations << " " << summary << " " << (long double)total/1000000000 << endl;
 
-    for (int i = 0; i < numOfThreads; ++i) {
-//        cout << times[i] << endl;
-        summary += times[i];
-    }
-
-    result = (long long int)((numOfThreads*numOfOperations)/((long double)summary/1000000000));
+    result = (long long int)((numOfThreads*numOfOperations)/((long double)total/1000000000));
 //    list.print();
     return result;
 }
 
 void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
     double p = 0.5;
+    int pIterations = 5;
+    unsigned int maxNumOfThreads = 32;
+    unsigned int maxHeightBottomBound = 5;
+    unsigned int maxHeightTopBound = 40;
+    int topBound = 3*numOfOperations;
     long long int result;
 
-    for(int i = 0; i < 5; ++i) {
+    for(int i = 0; i < pIterations; ++i) {
         file << "p = " << p << endl;
-        for(unsigned int maxHeight = 5; maxHeight <= 40; maxHeight += 5) {
+        for(unsigned int maxHeight = maxHeightBottomBound; maxHeight <= maxHeightTopBound; maxHeight += 5) {
             cout << "p = " << p << ", maxHeight = " << maxHeight << endl;
-            for (unsigned int k = 1; k <= 32; k *= 2) {
-                result = experiment(p, maxHeight, k, numOfOperations, b1, b2);
+            for (unsigned int k = 1; k <= maxNumOfThreads; k *= 2) {
+                result = experiment(p, maxHeight, k, numOfOperations, topBound, b1, b2);
                 cout << '\t' << result <<  endl;
                 file << result << '\t';
             }
@@ -276,8 +270,8 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
 }
 
 void runExperiments() {
-    int numOfOperations = 5000;
-    ofstream file("resultsThroughput.txt");
+    int numOfOperations = 10000;
+    ofstream file("resultsThroughputHandThousOps.txt");
     if(!file.is_open()) {
         cout << "Cannot create/open file result.txt" << endl;
         return;
@@ -323,9 +317,9 @@ int main() {
 //    int* ref5 = ref.getRefAndMark(mark);
 //    cout << ref5 << " " << mark << endl;
 
-    repeatTest(1);
+//    repeatTest(1);
 //    repeatTest(3577);
-//    runExperiments();
+    runExperiments();
 
     return 0;
 }

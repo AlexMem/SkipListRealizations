@@ -204,6 +204,7 @@ public:
     }
 
     bool remove(T value) {
+        bool markedIt;
         bool mark;
         int botLvl = 0;
         Node<T>** preds = new Node<T>*[maxHeight];
@@ -228,7 +229,7 @@ public:
 
             succ = toRemove->nexts[botLvl].getRefAndMark(mark);
             while(true) {
-                bool markedIt = toRemove->nexts[botLvl].CAS(succ, succ, false, true);
+                markedIt = toRemove->nexts[botLvl].CAS(succ, succ, false, true);
                 // linearization point if markedIf == true
                 succ = succs[botLvl]->nexts[botLvl].getRefAndMark(mark);
                 if(markedIt) {
