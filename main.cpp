@@ -2,38 +2,38 @@
 #include <ctime>
 #include <future>
 #include <thread>
-#include <mingw.thread.h>
+//#include <mingw.thread.h>
 #include <fstream>
 #include <unistd.h>
 #include "concurrent_lockfree_skiplist.h"
 
 using namespace std;
 
-struct HighResClock {
-    typedef long long                               rep;
-    typedef std::nano                               period;
-    typedef std::chrono::duration<rep, period>      duration;
-    typedef std::chrono::time_point<HighResClock>   time_point;
-    static const bool is_steady = true;
-
-    static time_point now();
-};
-
-namespace {
-    const long long g_Frequency = []() -> long long {
-        LARGE_INTEGER frequency;
-        QueryPerformanceFrequency(&frequency);
-//        cout << frequency.QuadPart << endl;
-        return frequency.QuadPart;
-    }();
-}
-
-HighResClock::time_point HighResClock::now() {
-    LARGE_INTEGER count;
-    QueryPerformanceCounter(&count);
-//    cout << count.QuadPart << " " << static_cast<rep>(period::den) << endl;
-    return time_point(duration(count.QuadPart * static_cast<rep>(period::den) / g_Frequency));
-}
+//struct HighResClock {
+//    typedef long long                               rep;
+//    typedef std::nano                               period;
+//    typedef std::chrono::duration<rep, period>      duration;
+//    typedef std::chrono::time_point<HighResClock>   time_point;
+//    static const bool is_steady = true;
+//
+//    static time_point now();
+//};
+//
+//namespace {
+//    const long long g_Frequency = []() -> long long {
+//        LARGE_INTEGER frequency;
+//        QueryPerformanceFrequency(&frequency);
+////        cout << frequency.QuadPart << endl;
+//        return frequency.QuadPart;
+//    }();
+//}
+//
+//HighResClock::time_point HighResClock::now() {
+//    LARGE_INTEGER count;
+//    QueryPerformanceCounter(&count);
+////    cout << count.QuadPart << " " << static_cast<rep>(period::den) << endl;
+//    return time_point(duration(count.QuadPart * static_cast<rep>(period::den) / g_Frequency));
+//}
 
 
 
@@ -175,34 +175,6 @@ void repeatTest(int times) {
 
 
 // [0]...contains...[b1]...add...[b2]...remove...[1]
-void experimentRoutine(ConcurrentSkipList<int>* list, int numOfOperations, double b1, double b2, double& time) {
-    std::mt19937 mt(rd());
-    std::uniform_real_distribution<double> dist(0.0, 1.0);
-    double decision;
-    clock_t start;
-    clock_t total = 0;
-    for (int i = 0; i < numOfOperations; ++i) {
-        decision = dist(mt);
-        if(decision < b1) {
-            start = clock();
-            list->contains(rd()%30000);
-            total += clock() - start;
-        } else {
-            if(decision < b2) {
-                start = clock();
-                list->add(rd()%30000);
-                total += clock() - start;
-            } else {
-                start = clock();
-                list->remove(rd()%30000);
-                total += clock() - start;
-            }
-        }
-    }
-    time = ((double)total)/CLOCKS_PER_SEC;
-//    cout << time << endl;
-}
-
 void experimentRoutineThroughput(ConcurrentSkipList<int>* list, int numOfOperations, int topBound, double b1, double b2) {
     std::mt19937 mt(rd());
     std::uniform_real_distribution<double> dist(0.0, 1.0);
@@ -225,20 +197,21 @@ long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThr
     ConcurrentSkipList<int> list(maxHeight, numOfThreads, p);
     randInit(&list);
     long long int result = 0;
-    HighResClock::time_point start;
-    long long int total = 0;
+    clock_t start, end;
+    long double total = 0;
     std::thread** threads = new std::thread*[numOfThreads];
-    start = HighResClock::now();
+    start = clock();
     for (int i = 0; i < numOfThreads; ++i) {
         threads[i] = new std::thread(experimentRoutineThroughput, &list, numOfOperations, topBound, b1, b2);
     }
     for (int i = 0; i < numOfThreads; ++i) {
         threads[i]->join();
     }
-    total = (HighResClock::now()-start).count();
+    end = clock();
+    total = (double)(end-start)/CLOCKS_PER_SEC;
 //    cout << numOfThreads*numOfOperations << " " << summary << " " << (long double)total/1000000000 << endl;
 
-    result = (long long int)((numOfThreads*numOfOperations)/((long double)total/1000000000));
+    result = (long long int)((numOfThreads*numOfOperations)/total);
 //    list.print();
     return result;
 }
