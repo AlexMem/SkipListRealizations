@@ -222,7 +222,7 @@ void experimentRoutineThroughput(ConcurrentSkipList<int>* list, int numOfOperati
 }
 
 long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThreads, int numOfOperations, int topBound, double b1, double b2) {
-    ConcurrentSkipList<int> list(maxHeight, numOfThreads, p);
+    ConcurrentSkipList<int> list(maxHeight, p);
     randInit(&list);
     long long int result = 0;
     HighResClock::time_point start;
@@ -249,15 +249,20 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
     unsigned int maxNumOfThreads = 32;
     unsigned int maxHeightBottomBound = 5;
     unsigned int maxHeightTopBound = 40;
+    unsigned int repeats = 5;
     int topBound = 3*numOfOperations;
-    long long int result;
+    long long int result = 0;
 
     for(int i = 0; i < pIterations; ++i) {
         file << "p = " << p << endl;
         for(unsigned int maxHeight = maxHeightBottomBound; maxHeight <= maxHeightTopBound; maxHeight += 5) {
             cout << "p = " << p << ", maxHeight = " << maxHeight << endl;
             for (unsigned int k = 1; k <= maxNumOfThreads; k *= 2) {
-                result = experiment(p, maxHeight, k, numOfOperations, topBound, b1, b2);
+                result = 0;
+                for (unsigned int reps = 0; reps < repeats; ++reps) {
+                    result += experiment(p, maxHeight, k, numOfOperations, topBound, b1, b2);
+                }
+                result /= repeats;
                 cout << '\t' << result <<  endl;
                 file << result << '\t';
             }
@@ -271,7 +276,7 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
 
 void runExperiments() {
     int numOfOperations = 10000;
-    ofstream file("resultsThroughputHandThousOps.txt");
+    ofstream file("resultsThroughputHandThousOps5Repeats.txt");
     if(!file.is_open()) {
         cout << "Cannot create/open file result.txt" << endl;
         return;

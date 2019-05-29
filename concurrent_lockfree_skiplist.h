@@ -2,20 +2,30 @@
 #include <random>
 #include "atomic_markable_reference.h"
 
+//Класс потокобезопасного неблокирующего списка с пропусками
 template <class T> class ConcurrentSkipList {
+    //Класс узла списка с пропусками
     template <class E> class Node {
     public:
+        //Элемент, хранимый в узле
         E value;
+        //Уровень узла
         unsigned int level;
+        //Массив маркируемых ссылок на следующие узлы
         AtomicMarkableReference<Node<E>>* nexts;
-
+        //Указатель (в атомарном объекте) на следующий удаленный узел, используется только когда узел добавлен во Freelist
         std::atomic<Node<E>*> nextFree{nullptr};
 
+        //Конструктор
+        //lvl - уровень узла
         explicit Node(unsigned int lvl) {
             nexts = new AtomicMarkableReference<Node<E>>[lvl+1];
             level = lvl;
         }
 
+        //Конструктор
+        //value - элемент для хранения в списке
+        //lvl - уровень узла
         Node(E value, unsigned int lvl) {
             this->value = value;
             nexts = new AtomicMarkableReference<Node<E>>[lvl+1];
@@ -27,8 +37,11 @@ template <class T> class ConcurrentSkipList {
         }
     };
 
+    //Класс списка удаленных узлов
     class FreeList {
+        //Указатель на голову списка (в атомарном объекте)
         std::atomic<Node<T>*> freeListHead{nullptr};
+        //Указатель на хвост списка (в атомарном объекте)
         std::atomic<Node<T>*> freeListTail{nullptr};
     public:
         FreeList() {
@@ -37,6 +50,8 @@ template <class T> class ConcurrentSkipList {
             freeListTail.store(headNode);
         }
 
+        //Добавляет узел в список удаленных узлов
+        //newNode - указатель на удаленный узел
         void add(Node<T>* newNode) {
             Node<T>* currentTail;
             do {
@@ -51,24 +66,29 @@ template <class T> class ConcurrentSkipList {
                 delete p;
             }
         }
-
     };
 
 // FIELDS
 private:
+    //Вероятностный параметр, регулирует разброс генерируемых высот для новых узлов списка
     double P;
+    //Максимальная высота списка
     unsigned int maxHeight;
-
+    //Генератор случайных целых чисел
     std::random_device randomDevice;
-
+    //Список удаленных узлов
     FreeList freeList;
-
+    //Голова списка с пропусками
     Node<T>* head;
+    //Хвост списка с пропусками
     Node<T>* tail;
 
 // CONSTRUCTORS
 public:
-    explicit ConcurrentSkipList(unsigned int maxHeight = 20, unsigned int maxNumOfThreads = 8, double P = 0.7) {
+    //Конструктор
+    //maxHeight - максимальная высота списка, по умолчанию = 10
+    //P - параметр P списка, по умолчанию = 0.5
+    explicit ConcurrentSkipList(unsigned int maxHeight = 10, double P = 0.5) {
         this->maxHeight = maxHeight;
         this->P = P;
         tail = new Node<T>(maxHeight-1);
@@ -91,6 +111,11 @@ public:
 
 // PUBLIC METHODS
 public:
+    //Метод поиска
+    //Осуществляет поиск элемента в списке с пропусками
+    //value - искомый элемент
+    //Возвращает    true - если элемент найден
+    //              false - если элемент отсутствует
     bool contains(T value) {
         int botLvl = 0;
         bool mark;
@@ -119,6 +144,13 @@ public:
         return compare(curr, value) == 0;
     }
 
+    //Внутренний метод поиска
+    //Осуществляет поиск элемента в списке с перевязыванием помеченных узлов
+    //value - искомый элемент
+    //preds - массив указателей на предшествующие узлы (заполняется методом)
+    //succs - массив указателей на последующие узлы (заполняется методом)
+    //Возвращает    true - если элемент найден
+    //              false - если элемент отсутствует
     bool find(T value, Node<T>** preds, Node<T>** succs) {
         int botLvl = 0;
         bool mark;
@@ -132,7 +164,6 @@ public:
             pred = head;
             for (int lvl = maxHeight-1; lvl >= botLvl; --lvl) {
                 curr = pred->nexts[lvl].getRef();
-                // linearization point if lvl == 0
                 while (true) {
                     succ = curr->nexts[lvl].getRefAndMark(mark);
                     while (curr != tail && mark){
@@ -140,7 +171,6 @@ public:
                             goto retry;
                         }
                         curr = pred->nexts[lvl].getRef();
-                        // linearization point if lvl == 0
                         succ = curr->nexts[lvl].getRefAndMark(mark);
                     }
 
@@ -160,6 +190,11 @@ public:
         }
     }
 
+    //Метод вставки
+    //Вставляет переданный элемент в список с пропусками
+    //value - вставляемый элемент
+    //Возвращает    true - если элемент вставлен в список с пропусками
+    //              false - если вставляемый элемент уже есть в списке с пропускми
     bool add(T value) {
         unsigned int topLvl = getRandomLevel();
         int botLvl = 0;
@@ -203,6 +238,11 @@ public:
         }
     }
 
+    //Метод удаления
+    //Удаляет переданный элемент из списка с пропусками
+    //value - удаляемый элемент
+    //Возвращает    true - если элемент удален тем потоком, который вызвал метод
+    //              false - если удаляемого элемента нет в списке или он был удален другим потоком
     bool remove(T value) {
         bool markedIt;
         bool mark;
@@ -287,6 +327,7 @@ public:
 
 // PRIVATE METHODS
 private:
+    //Генерирует случайный уровень для нового узла
     unsigned int getRandomLevel() {
         unsigned int lvl = 0;
         std::mt19937 mt(randomDevice());
@@ -297,6 +338,12 @@ private:
         return lvl;
     }
 
+    //Сравнивает элементы
+    //node - указатель на узел с элементом для сравнения
+    //other - другой элемент для сравнения
+    //Возвращает   -1 - если node->value < other
+    //              0 - если node->value = other
+    //              1 - если node->value > other
     int compare(Node<T>* node, T other) {
         if (node == tail) return 1;
         if (node->value < other) return -1;
