@@ -254,8 +254,10 @@ long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThr
 //    cout << numOfThreads*numOfOperations << " " << summary << " " << (long double)total/1000000000 << endl;
 
     result = (long long int)((numOfThreads*numOfOperations)/total);
-   list.print();
-   list.checkForLockFree();
+//     if(numOfThreads == 32) {
+//         list.print();
+//     }
+//    list.checkForLockFree();
     return result;
 }
 

@@ -163,17 +163,19 @@ public:
     bool add(T value) {
         unsigned int topLvl = getRandomLevel();
         int botLvl = 0;
-        Node<T>** preds = new Node<T>*[maxHeight];
-        Node<T>** succs = new Node<T>*[maxHeight];
+//         Node<T>** preds = new Node<T>*[maxHeight];
+//         Node<T>** succs = new Node<T>*[maxHeight];
+        Node<T>* preds[maxHeight];
+        Node<T>* succs[maxHeight];
+        Node<T>* newNode = new Node<T>(value, topLvl);
 
         while(true) {
             if(find(value, preds, succs)){
-                delete[] preds;
-                delete[] succs;
+//                 delete[] preds;
+//                 delete[] succs;
                 return false;
             }
 
-            Node<T>* newNode = new Node<T>(value, topLvl);
             for (int lvl = botLvl; lvl <= topLvl; ++lvl) {
                 newNode->nexts[lvl].setVal(succs[lvl], false);
             }
@@ -181,7 +183,7 @@ public:
             Node<T>* succ = succs[botLvl];
 
             if(!pred->nexts[botLvl].CAS(succ, newNode, false, false)) {
-                delete newNode;
+//                 delete newNode;
                 continue;
             }
             // linearization point
@@ -197,8 +199,8 @@ public:
                 }
             }
 
-            delete[] preds;
-            delete[] succs;
+//             delete[] preds;
+//             delete[] succs;
             return true;
         }
     }
@@ -207,14 +209,16 @@ public:
         bool markedIt;
         bool mark;
         int botLvl = 0;
-        Node<T>** preds = new Node<T>*[maxHeight];
-        Node<T>** succs = new Node<T>*[maxHeight];
+//         Node<T>** preds = new Node<T>*[maxHeight];
+//         Node<T>** succs = new Node<T>*[maxHeight];
+        Node<T>* preds[maxHeight];
+        Node<T>* succs[maxHeight];
         Node<T>* succ;
 
         while(true) {
             if(!find(value, preds, succs)) {
-                delete[] preds;
-                delete[] succs;
+//                 delete[] preds;
+//                 delete[] succs;
                 return false;
             }
 
@@ -235,13 +239,13 @@ public:
                 if(markedIt) {
                     find(value, preds, succs);
                     freeList.add(toRemove);
-                    delete[] preds;
-                    delete[] succs;
+//                     delete[] preds;
+//                     delete[] succs;
                     return true;
                 } else {
                     if(mark) {
-                        delete[] preds;
-                        delete[] succs;
+//                         delete[] preds;
+//                         delete[] succs;
                         return false;
                     }
                 }
