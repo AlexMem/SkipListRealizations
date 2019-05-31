@@ -1,7 +1,8 @@
 #define _WIN32_WINNT 0x0501
 #include <ctime>
 #include <future>
-#include <thread>
+#include <pthread.h>
+// #include <thread>
 //#include <mingw.thread.h>
 #include <fstream>
 #include <unistd.h>
@@ -193,26 +194,68 @@ void experimentRoutineThroughput(ConcurrentSkipList<int>* list, int numOfOperati
     }
 }
 
+struct params {
+    ConcurrentSkipList<int>* list;
+    int numOfOperations;
+    int topBound;
+    double b1;
+    double b2;
+};
+
+void* experimentRoutineThroughput1(void* args) {
+    std::mt19937 mt(rd());
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    double decision;
+    params* parms = (params*) args;
+    for (int i = 0; i < parms->numOfOperations; ++i) {
+        decision = dist(mt);
+        if(decision < parms->b1) {
+            parms->list->contains(rd()%parms->topBound);
+        } else {
+            if(decision < parms->b2) {
+                parms->list->add(rd()%parms->topBound);
+            } else {
+                parms->list->remove(rd()%parms->topBound);
+            }
+        }
+    }
+    pthread_exit(nullptr);
+}
+
 long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThreads, int numOfOperations, int topBound, double b1, double b2) {
     ConcurrentSkipList<int> list(maxHeight, numOfThreads, p);
     randInit(&list);
     long long int result = 0;
     clock_t start, end;
     long double total = 0;
-    std::thread** threads = new std::thread*[numOfThreads];
+    pthread_t pthreads[numOfOperations];
+    pthread_attr_t attr;
+//     std::thread** threads = new std::thread*[numOfThreads];
+    pthread_attr_init(&attr);
+    params parms;
+    parms.list = &list;
+    parms.numOfOperations = numOfOperations;
+    parms.topBound = topBound;
+    parms.b1 = b1;
+    parms.b2 = b2;
+    
     start = clock();
     for (int i = 0; i < numOfThreads; ++i) {
-        threads[i] = new std::thread(experimentRoutineThroughput, &list, numOfOperations, topBound, b1, b2);
+//         threads[i] = new std::thread(experimentRoutineThroughput, &list, numOfOperations, topBound, b1, b2);
+        pthread_create(&pthreads[i], &attr, experimentRoutineThroughput1, &parms);
     }
     for (int i = 0; i < numOfThreads; ++i) {
-        threads[i]->join();
+//         threads[i]->join();
+        pthread_join(pthreads[i], nullptr);
+        
     }
     end = clock();
     total = (double)(end-start)/CLOCKS_PER_SEC;
 //    cout << numOfThreads*numOfOperations << " " << summary << " " << (long double)total/1000000000 << endl;
 
     result = (long long int)((numOfThreads*numOfOperations)/total);
-//    list.print();
+   list.print();
+   list.checkForLockFree();
     return result;
 }
 
@@ -223,14 +266,19 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
     unsigned int maxHeightBottomBound = 5;
     unsigned int maxHeightTopBound = 40;
     int topBound = 3*numOfOperations;
-    long long int result;
+    int times = 3;
+    long long int result = 0;
 
     for(int i = 0; i < pIterations; ++i) {
         file << "p = " << p << endl;
         for(unsigned int maxHeight = maxHeightBottomBound; maxHeight <= maxHeightTopBound; maxHeight += 5) {
             cout << "p = " << p << ", maxHeight = " << maxHeight << endl;
             for (unsigned int k = 1; k <= maxNumOfThreads; k *= 2) {
-                result = experiment(p, maxHeight, k, numOfOperations, topBound, b1, b2);
+                result = 0;
+                for (int time = 0; time < times; ++time) {
+                    result += experiment(p, maxHeight, k, numOfOperations, topBound, b1, b2);
+                }
+                result /= times;
                 cout << '\t' << result <<  endl;
                 file << result << '\t';
             }
@@ -244,7 +292,7 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
 
 void runExperiments() {
     int numOfOperations = 10000;
-    ofstream file("resultsThroughputHandThousOps.txt");
+    ofstream file("resultsThroughputHandThousOps2.txt");
     if(!file.is_open()) {
         cout << "Cannot create/open file result.txt" << endl;
         return;
