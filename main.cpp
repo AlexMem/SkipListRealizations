@@ -2,6 +2,7 @@
 #include <ctime>
 #include <future>
 #include <pthread.h>
+#include <time.h>
 // #include <thread>
 //#include <mingw.thread.h>
 #include <fstream>
@@ -238,8 +239,9 @@ long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThr
     parms.topBound = topBound;
     parms.b1 = b1;
     parms.b2 = b2;
-    
-    start = clock();
+    timespec start1, end1;
+//     start = clock();
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start1);
     for (int i = 0; i < numOfThreads; ++i) {
 //         threads[i] = new std::thread(experimentRoutineThroughput, &list, numOfOperations, topBound, b1, b2);
         pthread_create(&pthreads[i], &attr, experimentRoutineThroughput1, &parms);
@@ -249,11 +251,16 @@ long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThr
         pthread_join(pthreads[i], nullptr);
         
     }
-    end = clock();
-    total = (double)(end-start)/CLOCKS_PER_SEC;
+//     end = clock();
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end1);
+//     total = (double)(end-start)/CLOCKS_PER_SEC;
+//     cout << start1.tv_sec << '.' << start1.tv_nsec << " -> " << end1.tv_sec << '.' << end1.tv_nsec;
+    total = (end1.tv_sec*1000000000+end1.tv_nsec) - (start1.tv_sec*1000000000+start1.tv_nsec);
+//     cout << ' ' << total << endl;
 //    cout << numOfThreads*numOfOperations << " " << summary << " " << (long double)total/1000000000 << endl;
 
-    result = (long long int)((numOfThreads*numOfOperations)/total);
+//     result = (long long int)((numOfThreads*numOfOperations)/total);
+    result = (long long int)((numOfThreads*numOfOperations)/(total/1000000000));
 //     if(numOfThreads == 32) {
 //         list.print();
 //     }
@@ -286,6 +293,8 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
             }
             cout << endl;
             file << endl;
+//             cout << "repeat";
+//             cin >> result;
         }
         p = p + 0.1;
         file << endl;
