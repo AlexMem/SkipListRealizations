@@ -173,6 +173,7 @@ public:
             if(find(value, preds, succs)){
 //                 delete[] preds;
 //                 delete[] succs;
+                delete newNode;
                 return false;
             }
 

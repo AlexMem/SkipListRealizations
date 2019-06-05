@@ -1,6 +1,6 @@
-#define _WIN32_WINNT 0x0501
+// #define _WIN32_WINNT 0x0501
 #include <ctime>
-#include <future>
+// #include <future>
 #include <pthread.h>
 #include <time.h>
 // #include <thread>
@@ -132,33 +132,33 @@ void randRoutine(ConcurrentSkipList<int>* list, int seed) {
 }
 
 void fixedTest(ConcurrentSkipList<int>* list) {
-    std::thread t1(routine1, list);
-    std::thread t2(routine2, list);
-    std::thread t3(routine3, list);
+//     std::thread t1(routine1, list);
+//     std::thread t2(routine2, list);
+//     std::thread t3(routine3, list);
 
-    t1.join();
-    t2.join();
-    t3.join();
+//     t1.join();
+//     t2.join();
+//     t3.join();
 }
 
 void randTest(ConcurrentSkipList<int>* list) {
-    std::thread t1(randRoutine, list, time(nullptr)*2);
-    std::thread t2(randRoutine, list, time(nullptr)*3);
-    std::thread t3(randRoutine, list, time(nullptr)*5);
-    std::thread t4(randRoutine, list, time(nullptr)*7);
-    std::thread t5(randRoutine, list, time(nullptr)*11);
-    std::thread t6(randRoutine, list, time(nullptr)*13);
-    std::thread t7(randRoutine, list, time(nullptr)*17);
-    std::thread t8(randRoutine, list, time(nullptr)*19);
+//     std::thread t1(randRoutine, list, time(nullptr)*2);
+//     std::thread t2(randRoutine, list, time(nullptr)*3);
+//     std::thread t3(randRoutine, list, time(nullptr)*5);
+//     std::thread t4(randRoutine, list, time(nullptr)*7);
+//     std::thread t5(randRoutine, list, time(nullptr)*11);
+//     std::thread t6(randRoutine, list, time(nullptr)*13);
+//     std::thread t7(randRoutine, list, time(nullptr)*17);
+//     std::thread t8(randRoutine, list, time(nullptr)*19);
 
-    t1.join();
-    t2.join();
-    t3.join();
-    t4.join();
-    t5.join();
-    t6.join();
-    t7.join();
-    t8.join();
+//     t1.join();
+//     t2.join();
+//     t3.join();
+//     t4.join();
+//     t5.join();
+//     t6.join();
+//     t7.join();
+//     t8.join();
 }
 
 void repeatTest(int times) {
@@ -229,22 +229,32 @@ long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThr
     long long int result = 0;
     clock_t start, end;
     long double total = 0;
-    pthread_t pthreads[numOfOperations];
-    pthread_attr_t attr;
+    pthread_t pthreads[numOfThreads];
+    pthread_attr_t attr[numOfThreads];
 //     std::thread** threads = new std::thread*[numOfThreads];
-    pthread_attr_init(&attr);
     params parms;
     parms.list = &list;
-    parms.numOfOperations = numOfOperations;
+    parms.numOfOperations = numOfOperations/numOfThreads;
     parms.topBound = topBound;
     parms.b1 = b1;
     parms.b2 = b2;
     timespec start1, end1;
+    int numCPU = sysconf(_SC_NPROCESSORS_ONLN);
+//     cout << "numCPU = " << numCPU << endl;
+    for (int i = 0; i < numOfThreads; ++i) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(i%numCPU, &cpuset);
+//         cout << i%numCPU << ' ';
+        pthread_attr_init(&attr[i]);
+        pthread_attr_setaffinity_np(&attr[i], sizeof(cpu_set_t), &cpuset);
+    }
+//     cout << endl;
 //     start = clock();
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start1);
+    clock_gettime(CLOCK_MONOTONIC, &start1);
     for (int i = 0; i < numOfThreads; ++i) {
 //         threads[i] = new std::thread(experimentRoutineThroughput, &list, numOfOperations, topBound, b1, b2);
-        pthread_create(&pthreads[i], &attr, experimentRoutineThroughput1, &parms);
+        pthread_create(&pthreads[i], &attr[i], experimentRoutineThroughput1, &parms);
     }
     for (int i = 0; i < numOfThreads; ++i) {
 //         threads[i]->join();
@@ -252,7 +262,7 @@ long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThr
         
     }
 //     end = clock();
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end1);
+    clock_gettime(CLOCK_MONOTONIC, &end1);
 //     total = (double)(end-start)/CLOCKS_PER_SEC;
 //     cout << start1.tv_sec << '.' << start1.tv_nsec << " -> " << end1.tv_sec << '.' << end1.tv_nsec;
     total = (end1.tv_sec*1000000000+end1.tv_nsec) - (start1.tv_sec*1000000000+start1.tv_nsec);
@@ -260,7 +270,7 @@ long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThr
 //    cout << numOfThreads*numOfOperations << " " << summary << " " << (long double)total/1000000000 << endl;
 
 //     result = (long long int)((numOfThreads*numOfOperations)/total);
-    result = (long long int)((numOfThreads*numOfOperations)/(total/1000000000));
+    result = (long long int)(numOfOperations/(total/1000000000));
 //     if(numOfThreads == 32) {
 //         list.print();
 //     }
@@ -270,9 +280,9 @@ long long int experiment(double p, unsigned int maxHeight, unsigned int numOfThr
 
 void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
     double p = 0.5;
-    int pIterations = 5;
+    int pIterations = 4;
     unsigned int maxNumOfThreads = 32;
-    unsigned int maxHeightBottomBound = 5;
+    unsigned int maxHeightBottomBound = 10;
     unsigned int maxHeightTopBound = 40;
     int topBound = 3*numOfOperations;
     int times = 3;
@@ -302,8 +312,8 @@ void experiments(double b1, double b2, int numOfOperations, ofstream& file) {
 }
 
 void runExperiments() {
-    int numOfOperations = 10000;
-    ofstream file("resultsThroughputHandThousOps2.txt");
+    int numOfOperations = 500000;
+    ofstream file("results500000OpsDiv3Repeats.txt");
     if(!file.is_open()) {
         cout << "Cannot create/open file result.txt" << endl;
         return;
